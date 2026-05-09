@@ -6,9 +6,7 @@
   const loading = document.getElementById("loading");
   const success = document.getElementById("success");
   const restart = document.getElementById("restart");
-  const errorBanner = document.getElementById("errorBanner");
-  const errorBannerText = document.getElementById("errorBannerText");
-  const errorBannerClose = document.getElementById("errorBannerClose");
+  const errorMessage = document.getElementById("errorMessage");
   const logoInput = document.getElementById("logo");
   const logoHint = document.getElementById("logoHint");
   const attachmentsInput = document.getElementById("attachments");
@@ -109,13 +107,16 @@
   }
 
   function showError(message) {
-    errorBannerText.textContent = message;
-    errorBanner.hidden = false;
+    if (!errorMessage) return;
+    errorMessage.textContent = message;
+    errorMessage.hidden = false;
+    errorMessage.scrollIntoView({ behavior: "smooth", block: "center" });
   }
   function hideError() {
-    errorBanner.hidden = true;
+    if (!errorMessage) return;
+    errorMessage.textContent = "";
+    errorMessage.hidden = true;
   }
-  errorBannerClose.addEventListener("click", hideError);
 
   function syncColor(input, output) {
     output.textContent = input.value.toUpperCase();
@@ -248,12 +249,8 @@
     }
   });
 
-  function closeSuccess() {
-    success.hidden = true;
-  }
-
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !success.hidden) closeSuccess();
+    if (e.key === "Escape" && !success.hidden) success.hidden = true;
   });
 
   restart.addEventListener("click", () => {

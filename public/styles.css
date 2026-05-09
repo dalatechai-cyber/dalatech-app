@@ -44,6 +44,22 @@ html {
   padding: 0;
   background: var(--bg-deep);
   color-scheme: dark;
+  scrollbar-width: thin;
+  scrollbar-color: #1a2744 transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #1a2744;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.35);
 }
 
 body {
@@ -76,7 +92,7 @@ a:hover { color: #67D2FB; }
    ========================================================================== */
 
 .bg-aurora {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
   overflow: hidden;
@@ -1023,51 +1039,25 @@ select option { background: var(--surface); color: var(--text); }
 .success-restart:active { transform: scale(0.97); }
 
 /* ==========================================================================
-   Error banner
+   Inline error message (no fixed positioning, no close button)
    ========================================================================== */
 
-.error-banner {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px 12px 18px;
-  max-width: calc(100vw - 32px);
+.error-message {
+  margin: var(--space-3) auto 0;
+  max-width: var(--max);
+  padding: 12px 16px;
   background: rgba(35, 12, 12, 0.92);
   border: 1px solid rgba(249, 115, 115, 0.45);
   color: var(--text);
   border-radius: var(--radius);
-  z-index: 200;
   font-size: 14px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  animation: banner-in 320ms var(--ease-quart) both;
+  line-height: 1.5;
+  animation: error-in 320ms var(--ease-quart) both;
 }
-@keyframes banner-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-.error-banner p { margin: 0; }
-.error-banner button {
-  background: transparent;
-  border: 0;
-  color: var(--muted-strong);
-  cursor: pointer;
-  padding: 6px 8px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    color 160ms var(--ease-quart),
-    background 160ms var(--ease-quart);
-}
-.error-banner button:hover {
-  color: var(--text);
-  background: rgba(249, 115, 115, 0.12);
+.error-message[hidden] { display: none; }
+@keyframes error-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ==========================================================================
@@ -1101,6 +1091,24 @@ select option { background: var(--surface); color: var(--text); }
 @media (max-width: 390px) {
   .hero-title { font-size: 30px; }
   .section-title { font-size: 18px; }
+  .page { padding: 0 16px var(--space-7); }
+  .site-header { padding: 14px 16px; }
+  input[type="text"],
+  input[type="email"],
+  input[type="tel"],
+  select,
+  textarea { padding: 13px 14px; font-size: 15.5px; }
+  .color-control { padding: 5px 12px 5px 5px; gap: 10px; }
+  .color-control input[type="color"] { width: 40px; height: 32px; }
+  .color-control output { font-size: 13px; }
+  .check { padding: 12px 14px; font-size: 14.5px; }
+  .file-drop { padding: 12px 14px; }
+  .file-drop-icon { width: 30px; height: 30px; }
+  .file-drop-label { font-size: 14px; }
+  .file-drop-sub { font-size: 12px; }
+  .submit { padding: 14px 22px; font-size: 15.5px; }
+  .actions-note { font-size: 13px; }
+  .section-num { min-width: 26px; height: 21px; font-size: 11px; }
 }
 
 /* ==========================================================================
