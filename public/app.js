@@ -6,7 +6,6 @@
   const loading = document.getElementById("loading");
   const success = document.getElementById("success");
   const restart = document.getElementById("restart");
-  const successClose = document.getElementById("successClose");
   const errorBanner = document.getElementById("errorBanner");
   const errorBannerText = document.getElementById("errorBannerText");
   const errorBannerClose = document.getElementById("errorBannerClose");
@@ -253,7 +252,6 @@
     success.hidden = true;
   }
 
-  successClose.addEventListener("click", closeSuccess);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !success.hidden) closeSuccess();
   });
@@ -332,7 +330,7 @@
 
       loading.hidden = true;
       success.hidden = false;
-      try { successClose.focus(); } catch {}
+      try { restart.focus(); } catch {}
     } catch (err) {
       loading.hidden = true;
       showError(err.message || "Сүлжээний алдаа. Дахин оролдоно уу.");
