@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050A18">
+  <title>DalaTech · Вэбсайтын демо хүсэх</title>
+  <meta name="description" content="Бизнесийнхээ талаар бөглөөд AI-аар бүтээгдсэн жинхэнэ вэбсайтын демо хэдхэн минутын дотор аваарай.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="brand" aria-label="DalaTech">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">DalaTech</span>
+    </a>
+    <span class="brand-tagline">AI · Premium вэбсайт</span>
+  </header>
+
+  <main class="page" id="page">
+    <section class="hero">
+      <p class="eyebrow">Шинэ бизнест зориулсан</p>
+      <h1 class="hero-title">Ганцхан минутад<br>өөрийн вэбсайтын демо аваарай</h1>
+      <p class="hero-sub">
+        Бизнесийнхээ талаар богино мэдээлэл бөглөж өгөөрэй. AI таны брэнд,
+        өнгө, хэв маягт тааруулж жинхэнэ вэбсайтын демо бүтээж имэйлээр
+        илгээнэ. Загвар биш, бэлэн хуудас.
+      </p>
+    </section>
+
+    <form id="brief" class="brief" novalidate>
+      <fieldset class="section">
+        <legend>
+          <span class="section-num">01</span>
+          <span class="section-title">Бизнесийн мэдээлэл</span>
+        </legend>
+
+        <div class="field">
+          <label for="businessName">Бизнесийн нэр</label>
+          <input id="businessName" name="businessName" type="text" required
+                 autocomplete="organization" maxlength="80"
+                 placeholder="ж: Matrix Eco Salon">
+          <p class="error" data-error-for="businessName" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="industry">Чиглэл</label>
+          <select id="industry" name="industry" required>
+            <option value="" disabled selected>Сонгоно уу...</option>
+            <option value="restaurant">Ресторан · Кафе</option>
+            <option value="salon">Гоо сайхан · Салон</option>
+            <option value="retail">Худалдаа · Дэлгүүр</option>
+            <option value="service">Үйлчилгээ</option>
+            <option value="tech">Технологи · IT</option>
+            <option value="other">Бусад</option>
+          </select>
+          <p class="error" data-error-for="industry" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="description">Бизнесийн тайлбар</label>
+          <textarea id="description" name="description" required rows="4" maxlength="800"
+                    placeholder="Та юу хийдэг вэ? Хэнд үйлчилдэг вэ? Юугаараа ялгардаг вэ?"></textarea>
+          <p class="hint">Хэдхэн өгүүлбэрээр бичиж болно.</p>
+          <p class="error" data-error-for="description" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="services">Үйлчилгээ эсвэл бүтээгдэхүүн</label>
+          <textarea id="services" name="services" required rows="4" maxlength="800"
+                    placeholder="Гол үйлчилгээнүүдээ жагсаагаарай. Үнэ, чанар, онцлог."></textarea>
+          <p class="error" data-error-for="services" aria-live="polite"></p>
+        </div>
+      </fieldset>
+
+      <fieldset class="section">
+        <legend>
+          <span class="section-num">02</span>
+          <span class="section-title">Дизайн ба брэнд</span>
+        </legend>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="primaryColor">Үндсэн өнгө</label>
+            <div class="color-control">
+              <input id="primaryColor" name="primaryColor" type="color" value="#2563EB">
+              <output for="primaryColor" id="primaryColorValue">#2563EB</output>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="secondaryColor">Хоёрдогч өнгө</label>
+            <div class="color-control">
+              <input id="secondaryColor" name="secondaryColor" type="color" value="#38BDF8">
+              <output for="secondaryColor" id="secondaryColorValue">#38BDF8</output>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="style">Хэв маяг</label>
+          <select id="style" name="style" required>
+            <option value="" disabled selected>Сонгоно уу...</option>
+            <option value="minimal">Minimal · Цэвэр, чөлөөтэй</option>
+            <option value="bold">Bold · Хүчтэй, тод</option>
+            <option value="elegant">Elegant · Гоёмсог, нарийн</option>
+            <option value="playful">Playful · Хөгжилтэй, найрсаг</option>
+            <option value="professional">Professional · Бизнес, тогтвортой</option>
+          </select>
+          <p class="error" data-error-for="style" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="references">Таалагддаг вэбсайтын жишээ <span class="optional">(заавал биш)</span></label>
+          <input id="references" name="references" type="text" maxlength="300"
+                 placeholder="ж: linear.app, apple.com">
+        </div>
+
+        <div class="field">
+          <label for="logo">Лого <span class="optional">(заавал биш, PNG/JPG)</span></label>
+          <input id="logo" name="logo" type="file" accept="image/png,image/jpeg">
+          <p class="hint" id="logoHint">5 MB-аас бага зураг.</p>
+        </div>
+      </fieldset>
+
+      <fieldset class="section">
+        <legend>
+          <span class="section-num">03</span>
+          <span class="section-title">Шаардлагатай хэсгүүд</span>
+        </legend>
+
+        <p class="section-help">Вэбсайтад орох хэсгүүдийг сонгоорой.</p>
+
+        <div class="checks">
+          <label class="check"><input type="checkbox" name="sections" value="Hero" checked><span>Hero (нүүр)</span></label>
+          <label class="check"><input type="checkbox" name="sections" value="About" checked><span>Бидний тухай</span></label>
+          <label class="check"><input type="checkbox" name="sections" value="Services" checked><span>Үйлчилгээ</span></label>
+          <label class="check"><input type="checkbox" name="sections" value="Pricing"><span>Үнэ</span></label>
+          <label class="check"><input type="checkbox" name="sections" value="Gallery"><span>Галерэй</span></label>
+          <label class="check"><input type="checkbox" name="sections" value="Contact" checked><span>Холбоо барих</span></label>
+          <label class="check"><input type="checkbox" name="sections" value="Booking"><span>Цаг захиалга</span></label>
+        </div>
+        <p class="error" data-error-for="sections" aria-live="polite"></p>
+      </fieldset>
+
+      <fieldset class="section">
+        <legend>
+          <span class="section-num">04</span>
+          <span class="section-title">Холбоо барих</span>
+        </legend>
+
+        <div class="field">
+          <label for="fullName">Таны нэр</label>
+          <input id="fullName" name="fullName" type="text" required
+                 autocomplete="name" maxlength="80" placeholder="Болд Дорж">
+          <p class="error" data-error-for="fullName" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="email">Имэйл хаяг</label>
+          <input id="email" name="email" type="email" required
+                 autocomplete="email" maxlength="120"
+                 placeholder="you@example.com">
+          <p class="hint">Бэлэн болсон демогоо энэ хаяг руу илгээнэ.</p>
+          <p class="error" data-error-for="email" aria-live="polite"></p>
+        </div>
+
+        <div class="field">
+          <label for="phone">Утасны дугаар</label>
+          <input id="phone" name="phone" type="tel" required
+                 autocomplete="tel" maxlength="40"
+                 placeholder="+976 9911 2233">
+          <p class="error" data-error-for="phone" aria-live="polite"></p>
+        </div>
+      </fieldset>
+
+      <div class="actions">
+        <button id="submit" class="submit" type="submit">
+          <span class="submit-label">Демо бэлтгэх</span>
+          <span class="submit-arrow" aria-hidden="true">→</span>
+        </button>
+        <p class="actions-note">Үнэгүй. 60 секунд орчим хүлээгээрэй.</p>
+      </div>
+    </form>
+
+    <footer class="site-footer">
+      <span>© DalaTech · dalatech.online</span>
+    </footer>
+  </main>
+
+  <div id="loading" class="overlay" hidden aria-live="polite" aria-busy="true">
+    <div class="overlay-inner">
+      <div class="loader" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </div>
+      <p class="loading-step" id="loadingStep">Таны мэдээллийг уншиж байна...</p>
+      <p class="loading-sub">Хүлээгээрэй, хуудас хаах хэрэггүй.</p>
+    </div>
+  </div>
+
+  <div id="success" class="overlay" hidden>
+    <div class="overlay-inner success-inner">
+      <div class="success-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="48" height="48"><path d="M5 17 L13 25 L27 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <p class="eyebrow">Демо бэлэн боллоо</p>
+      <h2 class="success-title" id="successTitle">Таны вэбсайт бэлтгэгдлээ</h2>
+      <p class="success-sub">Холбоосыг доороос үзэж болно. Имэйлээр бас илгээгдсэн.</p>
+      <a id="successLink" class="success-cta" href="#" target="_blank" rel="noopener">
+        <span>Вэбсайтаа үзэх</span>
+        <span aria-hidden="true">↗</span>
+      </a>
+      <button class="success-restart" type="button" id="restart">Шинээр бөглөх</button>
+    </div>
+  </div>
+
+  <div id="errorBanner" class="error-banner" hidden role="alert">
+    <p id="errorBannerText"></p>
+    <button type="button" id="errorBannerClose" aria-label="Хаах">×</button>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
