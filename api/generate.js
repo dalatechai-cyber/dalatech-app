@@ -139,7 +139,7 @@ function buildMailtoUrl({ businessName, fullName, phone, email, previewUrl }) {
     `Хүсэлт гаргасан: ${fullName || ""}`
   ].join("\n");
   const params = new URLSearchParams({ subject, body });
-  return `mailto:bilguunbilly0214@gmail.com?${params.toString()}`;
+  return `mailto:dalatech.ai@gmail.com?${params.toString()}`;
 }
 
 function escapeHtmlAttr(s) {
