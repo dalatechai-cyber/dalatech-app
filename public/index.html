@@ -5,16 +5,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#050A18">
   <title>DalaTech · Вэбсайтын демо хүсэх</title>
-  <meta name="description" content="Бизнесийнхээ талаар бөглөөд AI-аар бүтээгдсэн жинхэнэ вэбсайтын демо хэдхэн минутын дотор аваарай.">
+  <meta name="description" content="Бизнесийнхээ талаар бөглөөд AI-аар бүтээгдсэн жинхэнэ вэбсайтын демо имэйлээрээ хүлээж аваарай.">
+  <link rel="icon" type="image/jpeg" href="/dalatech_logo_v3.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div class="bg-aurora" aria-hidden="true">
+    <span class="bg-blob bg-blob-1"></span>
+    <span class="bg-blob bg-blob-2"></span>
+    <span class="bg-blob bg-blob-3"></span>
+    <svg class="bg-wave" viewBox="0 0 1440 600" preserveAspectRatio="none" focusable="false">
+      <defs>
+        <linearGradient id="waveStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#38BDF8" stop-opacity="0"/>
+          <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.55"/>
+          <stop offset="100%" stop-color="#2563EB" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path class="bg-wave-path bg-wave-path-1" d="M0,360 C240,300 360,420 720,360 C1080,300 1200,420 1440,360" fill="none" stroke="url(#waveStroke)" stroke-width="1.2"/>
+      <path class="bg-wave-path bg-wave-path-2" d="M0,420 C240,360 480,480 720,420 C960,360 1200,480 1440,420" fill="none" stroke="url(#waveStroke)" stroke-width="1"/>
+      <path class="bg-wave-path bg-wave-path-3" d="M0,300 C300,240 600,360 900,300 C1200,240 1320,360 1440,300" fill="none" stroke="url(#waveStroke)" stroke-width="0.8"/>
+    </svg>
+    <span class="bg-grain"></span>
+  </div>
+
   <header class="site-header">
-    <a href="/" class="brand" aria-label="DalaTech">
-      <span class="brand-dot" aria-hidden="true"></span>
+    <a href="https://dalatech.online" class="brand" aria-label="DalaTech">
+      <span class="brand-mark" aria-hidden="true">
+        <img src="/dalatech_logo_v3.jpg" alt="">
+      </span>
       <span class="brand-name">DalaTech</span>
     </a>
     <span class="brand-tagline">AI · Premium вэбсайт</span>
@@ -23,11 +45,11 @@
   <main class="page" id="page">
     <section class="hero">
       <p class="eyebrow">Шинэ бизнест зориулсан</p>
-      <h1 class="hero-title">Ганцхан минутад<br>өөрийн вэбсайтын демо аваарай</h1>
+      <h1 class="hero-title">Бизнесийнхээ нэрд<br>тохирсон жинхэнэ<br>вэбсайт аваарай.</h1>
       <p class="hero-sub">
-        Бизнесийнхээ талаар богино мэдээлэл бөглөж өгөөрэй. AI таны брэнд,
-        өнгө, хэв маягт тааруулж жинхэнэ вэбсайтын демо бүтээж имэйлээр
-        илгээнэ. Загвар биш, бэлэн хуудас.
+        Бизнесийнхээ талаар богино мэдээлэл бөглөнө үү. AI таны брэнд, өнгө,
+        хэв маягт тааруулж жинхэнэ вэбсайтын демо бүтээж имэйлээр илгээнэ.
+        Загвар биш, бэлэн хуудас.
       </p>
     </section>
 
@@ -48,15 +70,17 @@
 
         <div class="field">
           <label for="industry">Чиглэл</label>
-          <select id="industry" name="industry" required>
-            <option value="" disabled selected>Сонгоно уу...</option>
-            <option value="restaurant">Ресторан · Кафе</option>
-            <option value="salon">Гоо сайхан · Салон</option>
-            <option value="retail">Худалдаа · Дэлгүүр</option>
-            <option value="service">Үйлчилгээ</option>
-            <option value="tech">Технологи · IT</option>
-            <option value="other">Бусад</option>
-          </select>
+          <div class="select-wrap">
+            <select id="industry" name="industry" required>
+              <option value="" disabled selected>Сонгоно уу...</option>
+              <option value="restaurant">Ресторан · Кафе</option>
+              <option value="salon">Гоо сайхан · Салон</option>
+              <option value="retail">Худалдаа · Дэлгүүр</option>
+              <option value="service">Үйлчилгээ</option>
+              <option value="tech">Технологи · IT</option>
+              <option value="other">Бусад</option>
+            </select>
+          </div>
           <p class="error" data-error-for="industry" aria-live="polite"></p>
         </div>
 
@@ -102,14 +126,16 @@
 
         <div class="field">
           <label for="style">Хэв маяг</label>
-          <select id="style" name="style" required>
-            <option value="" disabled selected>Сонгоно уу...</option>
-            <option value="minimal">Minimal · Цэвэр, чөлөөтэй</option>
-            <option value="bold">Bold · Хүчтэй, тод</option>
-            <option value="elegant">Elegant · Гоёмсог, нарийн</option>
-            <option value="playful">Playful · Хөгжилтэй, найрсаг</option>
-            <option value="professional">Professional · Бизнес, тогтвортой</option>
-          </select>
+          <div class="select-wrap">
+            <select id="style" name="style" required>
+              <option value="" disabled selected>Сонгоно уу...</option>
+              <option value="minimal">Minimal · Цэвэр, чөлөөтэй</option>
+              <option value="bold">Bold · Хүчтэй, тод</option>
+              <option value="elegant">Elegant · Гоёмсог, нарийн</option>
+              <option value="playful">Playful · Хөгжилтэй, найрсаг</option>
+              <option value="professional">Professional · Бизнес, тогтвортой</option>
+            </select>
+          </div>
           <p class="error" data-error-for="style" aria-live="polite"></p>
         </div>
 
@@ -121,8 +147,16 @@
 
         <div class="field">
           <label for="logo">Лого <span class="optional">(заавал биш, PNG/JPG)</span></label>
-          <input id="logo" name="logo" type="file" accept="image/png,image/jpeg">
-          <p class="hint" id="logoHint">5 MB-аас бага зураг.</p>
+          <div class="file-drop" data-file-drop="logo">
+            <input id="logo" name="logo" type="file" accept="image/png,image/jpeg">
+            <div class="file-drop-inner">
+              <span class="file-drop-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              </span>
+              <span class="file-drop-label">Логог чирж тавих эсвэл сонгох</span>
+              <span class="file-drop-sub" id="logoHint">5 MB-аас бага зураг.</span>
+            </div>
+          </div>
         </div>
       </fieldset>
 
@@ -177,17 +211,70 @@
         </div>
       </fieldset>
 
+      <fieldset class="section">
+        <legend>
+          <span class="section-num">05</span>
+          <span class="section-title">Нэмэлт мэдээлэл <span class="legend-optional">(заавал биш)</span></span>
+        </legend>
+
+        <p class="section-help">
+          Манайд хүргэхийг хүсэж буй нэмэлт мэдээлэл, шаардлага, эсвэл асуултаа энд оруулна уу.
+        </p>
+
+        <div class="field">
+          <label for="notes">Тэмдэглэл</label>
+          <textarea id="notes" name="notes" rows="4" maxlength="1500"
+                    placeholder="Жишээ: Брэндийн өнгөтэй холбоотой жижиг тайлбар, агуулгын чиглүүлэг, тусгай хүсэлт..."></textarea>
+        </div>
+
+        <div class="field">
+          <label for="attachments">Нэмэлт файл</label>
+          <div class="file-drop file-drop-multi" data-file-drop="attachments">
+            <input id="attachments" name="attachments" type="file" multiple
+                   accept="image/*,.pdf,.doc,.docx,.txt">
+            <div class="file-drop-inner">
+              <span class="file-drop-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              </span>
+              <span class="file-drop-label">Файл чирж тавих эсвэл сонгох</span>
+              <span class="file-drop-sub">Лого, брэндийн гарын авлага, лавлагаа зураг, PDF, .doc — олон файл сонгож болно.</span>
+            </div>
+          </div>
+          <ul class="file-list" id="attachmentList" aria-live="polite"></ul>
+        </div>
+      </fieldset>
+
       <div class="actions">
         <button id="submit" class="submit" type="submit">
-          <span class="submit-label">Демо бэлтгэх</span>
-          <span class="submit-arrow" aria-hidden="true">→</span>
+          <span class="submit-label">Демо хүсэх</span>
+          <span class="submit-arrow" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+          </span>
         </button>
-        <p class="actions-note">Үнэгүй. 60 секунд орчим хүлээгээрэй.</p>
+        <p class="actions-note">Таны демо 2 хоногийн дотор бэлэн болж, имэйлээр илгээгдэнэ.</p>
       </div>
     </form>
 
     <footer class="site-footer">
-      <span>© DalaTech · dalatech.online</span>
+      <div class="footer-row">
+        <a href="https://dalatech.online" class="brand brand-footer">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="/dalatech_logo_v3.jpg" alt="">
+          </span>
+          <span class="brand-name">DalaTech</span>
+        </a>
+        <p class="footer-tagline">
+          AI-аар бүтээгдсэн жинхэнэ вэбсайт. Загвар биш, бэлэн хуудас.
+        </p>
+      </div>
+
+      <div class="footer-meta">
+        <p>© <span id="footerYear"></span> DalaTech. Бүх эрх хуулиар хамгаалагдсан.</p>
+        <p class="footer-credit">
+          <span class="footer-pulse" aria-hidden="true"></span>
+          Powered by <a href="https://dalatech.online" target="_blank" rel="noopener">DalaTech</a>
+        </p>
+      </div>
     </footer>
   </main>
 
@@ -196,30 +283,33 @@
       <div class="loader" aria-hidden="true">
         <span></span><span></span><span></span>
       </div>
-      <p class="loading-step" id="loadingStep">Таны мэдээллийг уншиж байна...</p>
-      <p class="loading-sub">Хүлээгээрэй, хуудас хаах хэрэггүй.</p>
+      <p class="loading-step">Илгээж байна...</p>
     </div>
   </div>
 
-  <div id="success" class="overlay" hidden>
+  <div id="success" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="successTitle">
     <div class="overlay-inner success-inner">
+      <button class="overlay-close" type="button" id="successClose" aria-label="Хаах">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
       <div class="success-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="48" height="48"><path d="M5 17 L13 25 L27 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg viewBox="0 0 32 32" width="44" height="44"><path d="M5 17 L13 25 L27 8" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
-      <p class="eyebrow">Демо бэлэн боллоо</p>
-      <h2 class="success-title" id="successTitle">Таны вэбсайт бэлтгэгдлээ</h2>
-      <p class="success-sub">Холбоосыг доороос үзэж болно. Имэйлээр бас илгээгдсэн.</p>
-      <a id="successLink" class="success-cta" href="#" target="_blank" rel="noopener">
-        <span>Вэбсайтаа үзэх</span>
-        <span aria-hidden="true">↗</span>
-      </a>
+      <p class="eyebrow">Мэдээлэл хүлээгдлээ</p>
+      <h2 class="success-title" id="successTitle">Баярлалаа</h2>
+      <p class="success-sub">
+        Таны демо 2 хоногийн дотор бэлэн болж, оруулсан имэйл хаяг руугаа
+        илгээгдэнэ. Шаардлагатай тохиолдолд бид холбогдох болно.
+      </p>
       <button class="success-restart" type="button" id="restart">Шинээр бөглөх</button>
     </div>
   </div>
 
   <div id="errorBanner" class="error-banner" hidden role="alert">
     <p id="errorBannerText"></p>
-    <button type="button" id="errorBannerClose" aria-label="Хаах">×</button>
+    <button type="button" id="errorBannerClose" aria-label="Хаах">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
   </div>
 
   <script src="/app.js" defer></script>
