@@ -2,7 +2,8 @@
 
 const { sendLeadNotification } = require("../lib/email");
 const { sendTelegramNotification } = require("../lib/telegram");
-const { createLead, STATUS, SCHEDULED_DELAY_MS } = require("../lib/leads");
+const { createLead, STATUS, scheduledSendAtIso } = require("../lib/leads");
+const { processLeadEndToEnd } = require("../lib/process-lead");
 
 const REQUIRED = [
   "businessName", "industry", "description", "services",
@@ -124,13 +125,13 @@ async function handler(req, res) {
   };
 
   const now = new Date();
-  const scheduledSendAt = new Date(now.getTime() + SCHEDULED_DELAY_MS).toISOString();
+  const scheduledSendAt = scheduledSendAtIso(now);
 
   console.log(`[generate] queueing lead business="${brief.businessName}" industry=${brief.industry} email=${brief.email} sendAt=${scheduledSendAt}`);
 
   let lead;
   try {
-    lead = createLead({
+    lead = await createLead({
       ...brief,
       status: STATUS.QUEUED,
       scheduledSendAt
@@ -139,6 +140,20 @@ async function handler(req, res) {
     console.error("[generate] lead persistence failed:", err?.message || err);
     return bad(res, 500, "Could not save your submission. Please try again.");
   }
+
+  // Fire the full pipeline immediately as a background promise so we
+  // don't have to wait up to an hour for the cron. Errors are logged;
+  // the cron is still the fallback for anything that doesn't complete
+  // before the serverless function is recycled.
+  Promise.resolve().then(() => processLeadEndToEnd(lead.id)).then(result => {
+    if (result?.ok) {
+      console.log(`[generate] background pipeline ok lead=#${lead.id} skipped=${!!result.skipped}`);
+    } else {
+      console.error(`[generate] background pipeline failed lead=#${lead.id}:`, result?.error);
+    }
+  }).catch(err => {
+    console.error(`[generate] background pipeline threw lead=#${lead.id}:`, err?.message || err);
+  });
 
   // Fire-and-forget notifications so the response stays instant.
   // The visitor never waits for these to complete.

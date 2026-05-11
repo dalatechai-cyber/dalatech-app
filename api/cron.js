@@ -1,13 +1,7 @@
 "use strict";
 
-const { runPipeline } = require("../lib/pipeline");
-const { sendClientEmail } = require("../lib/email");
-const {
-  findQueuedForGeneration,
-  findDueForSend,
-  updateLead,
-  STATUS
-} = require("../lib/leads");
+const { processOneGeneration, processOneSend } = require("../lib/process-lead");
+const { findQueuedForGeneration, findDueForSend } = require("../lib/leads");
 
 const MAX_GENERATIONS_PER_RUN = 1;
 const MAX_SENDS_PER_RUN = 5;
@@ -20,75 +14,6 @@ function isAuthorized(req) {
   const alt = req.headers?.["x-vercel-cron-secret"];
   if (typeof alt === "string" && alt === expected) return true;
   return false;
-}
-
-async function processOneGeneration(lead) {
-  console.log(`[cron] generating for lead=#${lead.id} business="${lead.businessName}"`);
-  const brief = {
-    businessName:   lead.businessName,
-    industry:       lead.industry,
-    description:    lead.description,
-    services:       lead.services,
-    primaryColor:   lead.primaryColor,
-    secondaryColor: lead.secondaryColor,
-    style:          lead.style,
-    references:     lead.references,
-    sections:       lead.sections,
-    fullName:       lead.fullName,
-    email:          lead.email,
-    phone:          lead.phone,
-    quality:        "demo"
-  };
-
-  updateLead(lead.id, { status: STATUS.FINISHING, lastError: null });
-
-  let result;
-  try {
-    result = await runPipeline({ brief, leadId: lead.id });
-  } catch (err) {
-    console.error(`[cron] generation failed lead=#${lead.id}:`, err?.message || err);
-    updateLead(lead.id, {
-      status: STATUS.FAILED,
-      lastError: err?.message || String(err)
-    });
-    return { ok: false, leadId: lead.id, error: err?.message || String(err) };
-  }
-
-  updateLead(lead.id, {
-    status: STATUS.READY,
-    previewUrl: result.previewUrl,
-    projectName: result.deployment?.projectName || null,
-    generatedAt: new Date().toISOString(),
-    lastError: null
-  });
-
-  console.log(`[cron] generation ok lead=#${lead.id} url=${result.previewUrl}`);
-  return { ok: true, leadId: lead.id, previewUrl: result.previewUrl };
-}
-
-async function processOneSend(lead) {
-  console.log(`[cron] sending scheduled email lead=#${lead.id} business="${lead.businessName}"`);
-  try {
-    await sendClientEmail({
-      to: lead.email,
-      businessName: lead.businessName,
-      fullName: lead.fullName,
-      previewUrl: lead.previewUrl,
-      mode: "demo"
-    });
-  } catch (err) {
-    console.error(`[cron] send failed lead=#${lead.id}:`, err?.message || err);
-    updateLead(lead.id, { lastError: err?.message || String(err) });
-    return { ok: false, leadId: lead.id, error: err?.message || String(err) };
-  }
-
-  updateLead(lead.id, {
-    status: STATUS.SENT,
-    sentAt: new Date().toISOString(),
-    lastError: null
-  });
-
-  return { ok: true, leadId: lead.id };
 }
 
 async function handler(req, res) {
@@ -104,13 +29,13 @@ async function handler(req, res) {
   const generations = [];
   const sends = [];
 
-  const queued = findQueuedForGeneration({ limit: MAX_GENERATIONS_PER_RUN });
+  const queued = await findQueuedForGeneration({ limit: MAX_GENERATIONS_PER_RUN });
   for (const lead of queued) {
     const result = await processOneGeneration(lead);
     generations.push(result);
   }
 
-  const due = findDueForSend({ limit: MAX_SENDS_PER_RUN });
+  const due = await findDueForSend({ limit: MAX_SENDS_PER_RUN });
   for (const lead of due) {
     const result = await processOneSend(lead);
     sends.push(result);

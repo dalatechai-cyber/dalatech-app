@@ -95,7 +95,13 @@ async function handler(req, res) {
   if (!businessId) return bad(res, 400, "businessId is required");
   if (!userMessage) return bad(res, 400, "message is required");
 
-  const lead = getLead(businessId);
+  let lead;
+  try {
+    lead = await getLead(businessId);
+  } catch (err) {
+    console.error(`[chat] lead lookup failed business=#${businessId}:`, err?.message || err);
+    return bad(res, 500, "Lead store unavailable");
+  }
   if (!lead) return bad(res, 404, "Business not found");
 
   const history = sanitizeHistory(body.history);

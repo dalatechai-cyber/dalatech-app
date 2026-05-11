@@ -36,7 +36,7 @@ async function processFinish({ lead, message }) {
 
   console.log(`[telegram-webhook] #${lead.id} finish: starting production pipeline`);
 
-  updateLead(lead.id, { status: "finishing", startedAt: new Date().toISOString() });
+  await updateLead(lead.id, { status: "finishing", startedAt: new Date().toISOString() });
 
   await sendTelegramReply({
     chatId,
@@ -66,7 +66,7 @@ async function processFinish({ lead, message }) {
     result = await runPipeline({ brief: productionBrief });
   } catch (err) {
     console.error(`[telegram-webhook] #${lead.id} pipeline failed:`, err?.message || err);
-    updateLead(lead.id, { status: "failed", lastError: err?.message || String(err) });
+    await updateLead(lead.id, { status: "failed", lastError: err?.message || String(err) });
     await sendTelegramReply({
       chatId,
       text: `❌ #${lead.id} амжилтгүй боллоо: ${err?.message || err}`,
@@ -76,7 +76,7 @@ async function processFinish({ lead, message }) {
   }
 
   const finalUrl = result.previewUrl;
-  updateLead(lead.id, {
+  await updateLead(lead.id, {
     status: "finished",
     finalUrl,
     finalProjectName: result.deployment.projectName,
@@ -136,7 +136,7 @@ async function handler(req, res) {
       return;
     }
 
-    const lead = getLead(cmd.id);
+    const lead = await getLead(cmd.id);
     if (!lead) {
       await sendTelegramReply({
         chatId: message.chat?.id,
