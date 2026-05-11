@@ -144,10 +144,16 @@ async function handler(req, res) {
 
   // Trigger the cron function out-of-band so the long-running generation
   // runs inside its 300-second budget instead of this 30-second function.
-  // We await briefly with a short timeout just to ensure the outbound
-  // request reaches Vercel before this function is frozen; the cron will
-  // keep running in its own invocation context for up to 5 minutes.
-  const triggerHeaders = { "X-Trigger": "generate" };
+  // X-Stage=generate + X-Lead-Id targets THIS lead explicitly (the legacy
+  // X-Trigger=generate path looked up "most recent queued" which races when
+  // submissions arrive close together). Each downstream stage (deploy,
+  // send) gets its own fresh 300s cron invocation via the chain inside
+  // lib/process-lead.js, so generation never starves deploy or send.
+  const triggerHeaders = {
+    "X-Trigger": "stage",
+    "X-Stage": "generate",
+    "X-Lead-Id": String(lead.id)
+  };
   if (process.env.CRON_SECRET) {
     triggerHeaders["Authorization"] = `Bearer ${process.env.CRON_SECRET}`;
   }
@@ -157,12 +163,12 @@ async function handler(req, res) {
       headers: triggerHeaders,
       signal: AbortSignal.timeout(2500)
     });
-    console.log(`[generate] cron trigger dispatched lead=#${lead.id}`);
+    console.log(`[generate] cron stage=generate trigger dispatched lead=#${lead.id}`);
   } catch (err) {
     if (err?.name === "TimeoutError" || err?.name === "AbortError") {
-      console.log(`[generate] cron trigger dispatched (no-wait) lead=#${lead.id}`);
+      console.log(`[generate] cron stage=generate trigger dispatched (no-wait) lead=#${lead.id}`);
     } else {
-      console.error(`[generate] cron trigger failed lead=#${lead.id}:`, err?.message || err);
+      console.error(`[generate] cron stage=generate trigger failed lead=#${lead.id}:`, err?.message || err);
     }
   }
 
