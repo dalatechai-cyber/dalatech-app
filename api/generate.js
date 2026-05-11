@@ -109,14 +109,17 @@ async function generateHtml(brief) {
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
 
   const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 16000,
-    system: buildSystemPrompt(),
-    messages: [
-      { role: "user", content: buildUserPrompt(brief) }
-    ]
-  });
+  const message = await client.messages.create(
+    {
+      model: "claude-sonnet-4-6",
+      max_tokens: 16000,
+      system: buildSystemPrompt(),
+      messages: [
+        { role: "user", content: buildUserPrompt(brief) }
+      ]
+    },
+    { timeout: 240000 }
+  );
 
   const text = (message.content || [])
     .filter(b => b.type === "text")
