@@ -4,7 +4,8 @@ const {
   processOneGeneration,
   processOneSend,
   processLeadEndToEnd,
-  runStage
+  runStage,
+  resumeStageForLead
 } = require("../lib/process-lead");
 const {
   findQueuedForGeneration,
@@ -43,14 +44,11 @@ async function findMostRecentQueued() {
     .sort((a, b) => Number(b.number) - Number(a.number))[0] || null;
 }
 
-// Map a stuck lead's status to the stage that should resume it.
+// Resolve the resume stage for a stuck lead. The three-variant pipeline
+// uses stage labels like "generate:2" / "deploy:3" / "send"; the helper
+// reads previewUrls + status to figure out where the chain stalled.
 function stageForStuckLead(lead) {
-  switch (lead.status) {
-    case STATUS.GENERATING: return "generate";
-    case STATUS.HTML_READY: return "deploy";
-    case STATUS.DEPLOYING:  return "deploy";
-    default: return null;
-  }
+  return resumeStageForLead(lead);
 }
 
 async function handler(req, res) {

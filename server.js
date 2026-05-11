@@ -8,6 +8,7 @@ const generateHandler = require("./api/generate");
 const cronHandler = require("./api/cron");
 const chatHandler = require("./api/chat");
 const telegramHandler = require("./api/telegram");
+const choiceHandler = require("./api/choice");
 
 const app = express();
 
@@ -31,6 +32,8 @@ mount("options", "/api/chat", chatHandler);
 mount("all", "/api/cron", cronHandler);
 mount("post", "/api/telegram", telegramHandler);
 mount("get", "/api/telegram", telegramHandler);
+mount("post", "/api/choice", choiceHandler);
+mount("options", "/api/choice", choiceHandler);
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 

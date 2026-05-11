@@ -12,6 +12,9 @@
     },
     "api/chat.js": {
       "maxDuration": 30
+    },
+    "api/choice.js": {
+      "maxDuration": 30
     }
   },
   "crons": [

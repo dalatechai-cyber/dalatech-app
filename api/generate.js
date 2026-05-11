@@ -172,29 +172,34 @@ async function handler(req, res) {
     }
   }
 
-  // Fire-and-forget notifications so the response stays instant.
-  // The visitor never waits for these to complete.
+  // Notifications MUST be awaited. Earlier versions used
+  // `Promise.resolve().then(...)` without await — Vercel froze the function
+  // runtime the moment `res.status(...).json(...)` ran, which terminated
+  // every in-flight fetch (Telegram + Resend) before it received a response.
+  // The logs showed `[telegram] -> sendMessage` and `[email] sending lead
+  // notification` but never the response lines, and the next invocation
+  // logged `fetch failed` as the orphaned promise rejected.
+  //
+  // Both calls are fast (sub-second under normal conditions), they fit
+  // inside the 30s budget comfortably. allSettled so one failure doesn't
+  // block the other.
   const briefForNotify = { ...brief, logo: body.logo ? { name: body.logo.name, type: body.logo.type } : null };
-
-  Promise.resolve().then(() => sendTelegramNotification({
-    brief: briefForNotify,
-    previewUrl: "(queued, generates within 1 hour)",
-    leadId: lead.id
-  })).then(() => {
+  const noteUrl = "(generating now, ready in ~15 min)";
+  const notificationResults = await Promise.allSettled([
+    sendTelegramNotification({ brief: briefForNotify, previewUrl: noteUrl, leadId: lead.id }),
+    sendLeadNotification({ brief: briefForNotify, previewUrl: noteUrl, leadId: lead.id })
+  ]);
+  const [telegramResult, emailResult] = notificationResults;
+  if (telegramResult.status === "fulfilled") {
     console.log(`[generate] telegram queued-notify ok lead=#${lead.id}`);
-  }).catch(err => {
-    console.error(`[generate] telegram queued-notify failed lead=#${lead.id}:`, err?.message || err);
-  });
-
-  Promise.resolve().then(() => sendLeadNotification({
-    brief: briefForNotify,
-    previewUrl: "(queued, generates within 1 hour)",
-    leadId: lead.id
-  })).then(() => {
+  } else {
+    console.error(`[generate] telegram queued-notify failed lead=#${lead.id}:`, telegramResult.reason?.message || telegramResult.reason);
+  }
+  if (emailResult.status === "fulfilled") {
     console.log(`[generate] lead email queued-notify ok lead=#${lead.id}`);
-  }).catch(err => {
-    console.error(`[generate] lead email queued-notify failed lead=#${lead.id}:`, err?.message || err);
-  });
+  } else {
+    console.error(`[generate] lead email queued-notify failed lead=#${lead.id}:`, emailResult.reason?.message || emailResult.reason);
+  }
 
   return res.status(200).json({
     ok: true,
