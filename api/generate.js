@@ -1,10 +1,9 @@
 "use strict";
 
-const Anthropic = require("@anthropic-ai/sdk");
-const { buildSystemPrompt, buildUserPrompt } = require("../lib/prompt");
-const { deployToVercel } = require("../lib/deploy");
+const { runPipeline } = require("../lib/pipeline");
 const { sendClientEmail, sendLeadNotification } = require("../lib/email");
 const { sendTelegramNotification } = require("../lib/telegram");
+const { createLead } = require("../lib/leads");
 
 const REQUIRED = [
   "businessName", "industry", "description", "services",
@@ -94,132 +93,12 @@ function validateBody(body) {
   return null;
 }
 
-function extractHtml(text) {
-  if (!text) return "";
-  const trimmed = text.trim();
-  const fence = trimmed.match(/```(?:html)?\s*([\s\S]*?)```/i);
-  const candidate = fence ? fence[1].trim() : trimmed;
-  const start = candidate.search(/<!doctype\s+html|<html\b/i);
-  if (start >= 0) return candidate.slice(start).trim();
-  return candidate;
-}
-
-async function generateHtml(brief) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
-
-  const client = new Anthropic({ apiKey });
-  const message = await client.messages.create(
-    {
-      model: "claude-sonnet-4-6",
-      max_tokens: 16000,
-      system: buildSystemPrompt(),
-      messages: [
-        { role: "user", content: buildUserPrompt(brief) }
-      ]
-    },
-    { timeout: 240000 }
-  );
-
-  const text = (message.content || [])
-    .filter(b => b.type === "text")
-    .map(b => b.text)
-    .join("\n");
-
-  const html = extractHtml(text);
-  if (!html || !/<html/i.test(html)) {
-    throw new Error("Claude did not return valid HTML");
-  }
-  return html;
-}
-
-function buildMailtoUrl({ businessName, fullName, phone, email, previewUrl }) {
-  const subject = `Бүрэн вэбсайт захиалах - ${businessName || ""}`;
-  const body = [
-    `Демо вэбсайт: ${previewUrl}`,
-    `Бизнесийн нэр: ${businessName || ""}`,
-    `Холбоо барих: ${phone || ""} | ${email || ""}`,
-    `Хүсэлт гаргасан: ${fullName || ""}`
-  ].join("\n");
-  const params = new URLSearchParams({ subject, body });
-  return `mailto:dalatech.ai@gmail.com?${params.toString()}`;
-}
-
-function escapeHtmlAttr(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function injectStickyCta(html, mailtoUrl) {
-  const safeHref = escapeHtmlAttr(mailtoUrl);
-  const cta = `
-<style id="dalatech-cta-style">
-  .dalatech-demo-cta {
-    position: fixed;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 99999;
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 20px;
-    background: rgba(13, 20, 48, 0.94);
-    color: #F0F4FF;
-    border: 1px solid rgba(56, 189, 248, 0.4);
-    border-radius: 999px;
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 1.3;
-    text-decoration: none;
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    box-shadow: 0 16px 40px -12px rgba(0,0,0,0.55), 0 0 0 1px rgba(56,189,248,0.12) inset;
-    transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1), border-color 200ms;
-    max-width: calc(100vw - 24px);
-    white-space: nowrap;
-  }
-  .dalatech-demo-cta-prompt { color: rgba(240, 244, 255, 0.78); font-weight: 400; }
-  .dalatech-demo-cta-arrow { color: #38BDF8; }
-  .dalatech-demo-cta-action { font-weight: 600; }
-  .dalatech-demo-cta:hover {
-    transform: translateX(-50%) translateY(-2px);
-    border-color: rgba(56, 189, 248, 0.65);
-  }
-  .dalatech-demo-cta:active { transform: translateX(-50%) scale(0.97); }
-  @media (max-width: 540px) {
-    .dalatech-demo-cta { font-size: 12.5px; padding: 11px 16px; gap: 8px; }
-    .dalatech-demo-cta-prompt { display: none; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .dalatech-demo-cta { transition: border-color 200ms; }
-    .dalatech-demo-cta:hover { transform: translateX(-50%); }
-  }
-</style>
-<a class="dalatech-demo-cta" href="${safeHref}" target="_blank" rel="noopener">
-  <span class="dalatech-demo-cta-prompt">Энэ загварт дуртай юу?</span>
-  <span class="dalatech-demo-cta-arrow" aria-hidden="true">→</span>
-  <span class="dalatech-demo-cta-action">Бүрэн вэбсайт захиалах</span>
-</a>
-`;
-  if (/<\/body>/i.test(html)) {
-    return html.replace(/<\/body>/i, `${cta}</body>`);
-  }
-  return `${html}\n${cta}`;
-}
-
 async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return bad(res, 405, "Method not allowed");
   }
 
-  // Validate critical env keys up-front so we fail fast with a clear message.
   if (!process.env.ANTHROPIC_API_KEY) return bad(res, 500, "Server misconfigured: ANTHROPIC_API_KEY missing");
   if (!process.env.VERCEL_TOKEN) return bad(res, 500, "Server misconfigured: VERCEL_TOKEN missing");
 
@@ -243,74 +122,60 @@ async function handler(req, res) {
     fullName:       String(body.fullName).trim().slice(0, 120),
     email:          String(body.email).trim().slice(0, 200),
     phone:          String(body.phone).trim().slice(0, 60),
-    logo:           body.logo && body.logo.dataUrl ? body.logo : null
+    logo:           body.logo && body.logo.dataUrl ? body.logo : null,
+    quality:        "demo"
   };
 
-  // Step 1: Generate HTML with Claude (hard requirement).
-  let html;
+  console.log(`[generate] new request business="${brief.businessName}" industry=${brief.industry} email=${brief.email}`);
+
+  let pipelineResult;
   try {
-    html = await generateHtml(brief);
+    pipelineResult = await runPipeline({ brief });
   } catch (err) {
-    console.error("[generate] Claude failed:", err?.message || err);
-    return bad(res, 502, "AI generation failed. Please try again.");
+    console.error("[generate] pipeline failed:", err?.message || err);
+    const msg = err?.message || "";
+    if (msg.includes("Claude") || msg.includes("HTML")) return bad(res, 502, "AI generation failed. Please try again.");
+    if (msg.includes("Vercel")) return bad(res, 502, "Deployment failed. Please try again.");
+    return bad(res, 502, "Pipeline failed. Please try again.");
   }
 
-  // Step 2: Inject sticky CTA bar into the HTML before the first deploy.
-  // We inject before deploy (not after) so we only deploy once.
-  const placeholderUrl = "https://dalatech-demo.vercel.app";
-  let htmlWithCta = injectStickyCta(html, buildMailtoUrl({
-    businessName: brief.businessName,
-    fullName:     brief.fullName,
-    phone:        brief.phone,
-    email:        brief.email,
-    previewUrl:   placeholderUrl
-  }));
+  const { previewUrl, deployment } = pipelineResult;
 
-  // Step 3: Deploy to Vercel (hard requirement).
-  let deployment;
+  let lead = null;
   try {
-    deployment = await deployToVercel({
-      projectName: brief.businessName,
-      html: htmlWithCta
-    });
-  } catch (err) {
-    console.error("[generate] Vercel deploy failed:", err?.message || err);
-    return bad(res, 502, "Deployment failed. Please try again.");
-  }
-  let previewUrl = deployment.url;
-
-  // Step 4: Re-deploy with the real preview URL substituted into the mailto.
-  // This is best-effort; if it fails, the original deploy still works.
-  try {
-    const realCtaHtml = injectStickyCta(html, buildMailtoUrl({
+    lead = createLead({
       businessName: brief.businessName,
-      fullName:     brief.fullName,
-      phone:        brief.phone,
-      email:        brief.email,
-      previewUrl
-    }));
-    const redeploy = await deployToVercel({
-      projectName: brief.businessName,
-      html: realCtaHtml
+      industry: brief.industry,
+      description: brief.description,
+      services: brief.services,
+      primaryColor: brief.primaryColor,
+      secondaryColor: brief.secondaryColor,
+      style: brief.style,
+      references: brief.references,
+      sections: brief.sections,
+      fullName: brief.fullName,
+      email: brief.email,
+      phone: brief.phone,
+      previewUrl,
+      projectName: deployment.projectName
     });
-    if (redeploy?.url) {
-      previewUrl = redeploy.url;
-      deployment.url = redeploy.url;
-      deployment.projectName = redeploy.projectName;
-    }
+    console.log(`[generate] persisted lead #${lead.id}`);
   } catch (err) {
-    console.error("[generate] CTA-aware redeploy failed (continuing with original):", err?.message || err);
+    console.error("[generate] lead persistence failed:", err?.message || err);
   }
 
-  // Step 5/6/7: Notifications. Each runs independently so one failure
-  // does not block the others. Failures surface as warnings to the client.
+  const leadId = lead?.id || null;
   const warnings = [];
 
   const clientEmailPromise = sendClientEmail({
     to: brief.email,
     businessName: brief.businessName,
     fullName: brief.fullName,
-    previewUrl
+    previewUrl,
+    mode: "demo"
+  }).then(r => {
+    console.log("[generate] client email ok");
+    return r;
   }).catch(err => {
     console.error("[generate] client email failed:", err?.message || err);
     return { error: err?.message || "client email failed" };
@@ -318,7 +183,11 @@ async function handler(req, res) {
 
   const leadEmailPromise = sendLeadNotification({
     brief,
-    previewUrl
+    previewUrl,
+    leadId
+  }).then(r => {
+    console.log("[generate] lead email ok");
+    return r;
   }).catch(err => {
     console.error("[generate] lead email failed:", err?.message || err);
     return { error: err?.message || "lead email failed" };
@@ -326,7 +195,11 @@ async function handler(req, res) {
 
   const telegramPromise = sendTelegramNotification({
     brief,
-    previewUrl
+    previewUrl,
+    leadId
+  }).then(r => {
+    console.log(`[generate] telegram ok leadId=#${leadId || "?"}`);
+    return r;
   }).catch(err => {
     console.error("[generate] telegram failed:", err?.message || err);
     return { error: err?.message || "telegram failed" };
@@ -346,6 +219,7 @@ async function handler(req, res) {
     ok: true,
     previewUrl,
     projectName: deployment.projectName,
+    leadId,
     warnings: warnings.length ? warnings : undefined
   });
 }

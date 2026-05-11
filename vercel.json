@@ -3,6 +3,9 @@
   "functions": {
     "api/generate.js": {
       "maxDuration": 300
+    },
+    "api/telegram.js": {
+      "maxDuration": 300
     }
   }
 }
