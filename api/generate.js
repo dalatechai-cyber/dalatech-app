@@ -1,9 +1,8 @@
 "use strict";
 
-const { runPipeline } = require("../lib/pipeline");
-const { sendClientEmail, sendLeadNotification } = require("../lib/email");
+const { sendLeadNotification } = require("../lib/email");
 const { sendTelegramNotification } = require("../lib/telegram");
-const { createLead } = require("../lib/leads");
+const { createLead, STATUS, SCHEDULED_DELAY_MS } = require("../lib/leads");
 
 const REQUIRED = [
   "businessName", "industry", "description", "services",
@@ -121,106 +120,55 @@ async function handler(req, res) {
     sections:       (body.sections || []).map(String),
     fullName:       String(body.fullName).trim().slice(0, 120),
     email:          String(body.email).trim().slice(0, 200),
-    phone:          String(body.phone).trim().slice(0, 60),
-    logo:           body.logo && body.logo.dataUrl ? body.logo : null,
-    quality:        "demo"
+    phone:          String(body.phone).trim().slice(0, 60)
   };
 
-  console.log(`[generate] new request business="${brief.businessName}" industry=${brief.industry} email=${brief.email}`);
+  const now = new Date();
+  const scheduledSendAt = new Date(now.getTime() + SCHEDULED_DELAY_MS).toISOString();
 
-  let pipelineResult;
-  try {
-    pipelineResult = await runPipeline({ brief });
-  } catch (err) {
-    console.error("[generate] pipeline failed:", err?.message || err);
-    const msg = err?.message || "";
-    if (msg.includes("Claude") || msg.includes("HTML")) return bad(res, 502, "AI generation failed. Please try again.");
-    if (msg.includes("Vercel")) return bad(res, 502, "Deployment failed. Please try again.");
-    return bad(res, 502, "Pipeline failed. Please try again.");
-  }
+  console.log(`[generate] queueing lead business="${brief.businessName}" industry=${brief.industry} email=${brief.email} sendAt=${scheduledSendAt}`);
 
-  const { previewUrl, deployment } = pipelineResult;
-
-  let lead = null;
+  let lead;
   try {
     lead = createLead({
-      businessName: brief.businessName,
-      industry: brief.industry,
-      description: brief.description,
-      services: brief.services,
-      primaryColor: brief.primaryColor,
-      secondaryColor: brief.secondaryColor,
-      style: brief.style,
-      references: brief.references,
-      sections: brief.sections,
-      fullName: brief.fullName,
-      email: brief.email,
-      phone: brief.phone,
-      previewUrl,
-      projectName: deployment.projectName
+      ...brief,
+      status: STATUS.QUEUED,
+      scheduledSendAt
     });
-    console.log(`[generate] persisted lead #${lead.id}`);
   } catch (err) {
     console.error("[generate] lead persistence failed:", err?.message || err);
+    return bad(res, 500, "Could not save your submission. Please try again.");
   }
 
-  const leadId = lead?.id || null;
-  const warnings = [];
+  // Fire-and-forget notifications so the response stays instant.
+  // The visitor never waits for these to complete.
+  const briefForNotify = { ...brief, logo: body.logo ? { name: body.logo.name, type: body.logo.type } : null };
 
-  const clientEmailPromise = sendClientEmail({
-    to: brief.email,
-    businessName: brief.businessName,
-    fullName: brief.fullName,
-    previewUrl,
-    mode: "demo"
-  }).then(r => {
-    console.log("[generate] client email ok");
-    return r;
+  Promise.resolve().then(() => sendTelegramNotification({
+    brief: briefForNotify,
+    previewUrl: "(queued, generates within 1 hour)",
+    leadId: lead.id
+  })).then(() => {
+    console.log(`[generate] telegram queued-notify ok lead=#${lead.id}`);
   }).catch(err => {
-    console.error("[generate] client email failed:", err?.message || err);
-    return { error: err?.message || "client email failed" };
+    console.error(`[generate] telegram queued-notify failed lead=#${lead.id}:`, err?.message || err);
   });
 
-  const leadEmailPromise = sendLeadNotification({
-    brief,
-    previewUrl,
-    leadId
-  }).then(r => {
-    console.log("[generate] lead email ok");
-    return r;
+  Promise.resolve().then(() => sendLeadNotification({
+    brief: briefForNotify,
+    previewUrl: "(queued, generates within 1 hour)",
+    leadId: lead.id
+  })).then(() => {
+    console.log(`[generate] lead email queued-notify ok lead=#${lead.id}`);
   }).catch(err => {
-    console.error("[generate] lead email failed:", err?.message || err);
-    return { error: err?.message || "lead email failed" };
+    console.error(`[generate] lead email queued-notify failed lead=#${lead.id}:`, err?.message || err);
   });
-
-  const telegramPromise = sendTelegramNotification({
-    brief,
-    previewUrl,
-    leadId
-  }).then(r => {
-    console.log(`[generate] telegram ok leadId=#${leadId || "?"}`);
-    return r;
-  }).catch(err => {
-    console.error("[generate] telegram failed:", err?.message || err);
-    return { error: err?.message || "telegram failed" };
-  });
-
-  const [clientResult, leadResult, telegramResult] = await Promise.all([
-    clientEmailPromise,
-    leadEmailPromise,
-    telegramPromise
-  ]);
-
-  if (clientResult && clientResult.error) warnings.push(`client email: ${clientResult.error}`);
-  if (leadResult && leadResult.error) warnings.push(`lead email: ${leadResult.error}`);
-  if (telegramResult && telegramResult.error) warnings.push(`telegram: ${telegramResult.error}`);
 
   return res.status(200).json({
     ok: true,
-    previewUrl,
-    projectName: deployment.projectName,
-    leadId,
-    warnings: warnings.length ? warnings : undefined
+    queued: true,
+    leadId: lead.id,
+    scheduledSendAt
   });
 }
 

@@ -5,7 +5,6 @@
   const submit = document.getElementById("submit");
   const loading = document.getElementById("loading");
   const success = document.getElementById("success");
-  const restart = document.getElementById("restart");
   const errorMessage = document.getElementById("errorMessage");
   const logoInput = document.getElementById("logo");
   const logoHint = document.getElementById("logoHint");
@@ -249,22 +248,6 @@
     }
   });
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !success.hidden) success.hidden = true;
-  });
-
-  restart.addEventListener("click", () => {
-    success.hidden = true;
-    form.reset();
-    attachmentFiles = [];
-    renderAttachments();
-    primaryColorValue.textContent = primaryColor.value.toUpperCase();
-    secondaryColorValue.textContent = secondaryColor.value.toUpperCase();
-    logoHint.textContent = "5 MB-аас бага зураг.";
-    logoHint.style.color = "";
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  });
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     hideError();
@@ -308,31 +291,26 @@
       }
     }
 
+    // Show confirmation immediately. The backend queues the work; we do not
+    // wait for generation/deployment/email here.
     submit.disabled = true;
-    loading.hidden = false;
+    if (loading) loading.hidden = true;
+    if (form) form.hidden = true;
+    success.hidden = false;
+    try { success.focus(); } catch {}
 
-    try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, logo, attachments })
+    fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...data, logo, attachments })
+    }).then(res => res.json().catch(() => ({})))
+      .then(payload => {
+        if (!payload?.ok) {
+          console.warn("[submit] backend did not accept lead:", payload?.error || "unknown");
+        }
+      })
+      .catch(err => {
+        console.warn("[submit] background request failed:", err);
       });
-
-      const payload = await res.json().catch(() => ({}));
-
-      if (!res.ok || !payload?.ok) {
-        const msg = payload?.error || `Алдаа гарлаа (${res.status}). Дахин оролдоно уу.`;
-        throw new Error(msg);
-      }
-
-      loading.hidden = true;
-      success.hidden = false;
-      try { restart.focus(); } catch {}
-    } catch (err) {
-      loading.hidden = true;
-      showError(err.message || "Сүлжээний алдаа. Дахин оролдоно уу.");
-    } finally {
-      submit.disabled = false;
-    }
   });
 })();

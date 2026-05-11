@@ -2,10 +2,22 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/generate.js": {
-      "maxDuration": 300
+      "maxDuration": 30
     },
     "api/telegram.js": {
       "maxDuration": 300
+    },
+    "api/cron.js": {
+      "maxDuration": 300
+    },
+    "api/chat.js": {
+      "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 * * * *"
+    }
+  ]
 }
