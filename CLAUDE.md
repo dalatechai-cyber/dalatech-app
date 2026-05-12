@@ -19,7 +19,7 @@ Node.js, Vercel serverless, Upstash Redis, Anthropic Claude API, Resend email, T
 - lib/email.js — Resend email templates
 - lib/telegram.js — Telegram API calls + command parsers
 - lib/deploy.js — Vercel deployment + custom-domain API
-- lib/namecheap.js — Namecheap XML API (check / purchase / set nameservers)
+- lib/porkbun.js — Porkbun JSON API (check / purchase / set nameservers)
 
 ## Pipeline stages
 generate:1 → deploy:1 → generate:2 → deploy:2 → generate:3 → deploy:3 → send
@@ -37,9 +37,9 @@ ALWAYS read /mnt/skills/public/frontend-design/SKILL.md (impeccable) and emil-de
 
 ## Domain automation (Telegram DOMAIN command)
 Two paths. Both end in `domain_pending` status with the hourly cron flipping to `domain_live` once DNS resolves to Vercel.
-- `DOMAIN #001 new gsauto.mn` — Path A: Namecheap check → purchase → set Vercel nameservers → add domain to Vercel project → notify Bilguun.
+- `DOMAIN #001 new gsauto.mn` — Path A: Porkbun check → purchase → set Vercel nameservers → add domain to Vercel project → notify Bilguun.
 - `DOMAIN #001 existing gsauto.mn` — Path B: add domain to Vercel project → send DNS instructions Bilguun forwards to the client.
 - Hourly sweep: `api/cron.js` resolves each pending domain via Node DNS + Vercel `/domains/{domain}/config`; flips to `domain_live` on success, sends a one-shot warning at 72h pending.
 
 ## Environment variables (all in Vercel)
-ANTHROPIC_API_KEY, RESEND_API_KEY, VERCEL_TOKEN, VERCEL_TEAM_ID, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, QSTASH_TOKEN, FROM_EMAIL, LEAD_NOTIFY_EMAIL, DEMO_DELAY_HOURS, NAMECHEAP_API_KEY, NAMECHEAP_API_USER, NAMECHEAP_USERNAME, NAMECHEAP_CLIENT_IP, NAMECHEAP_REGISTRANT_* (FIRSTNAME/LASTNAME/ADDRESS1/CITY/STATEPROVINCE/POSTALCODE/COUNTRY/PHONE/EMAILADDRESS)
+ANTHROPIC_API_KEY, RESEND_API_KEY, VERCEL_TOKEN, VERCEL_TEAM_ID, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, QSTASH_TOKEN, FROM_EMAIL, LEAD_NOTIFY_EMAIL, DEMO_DELAY_HOURS, PORKBUN_API_KEY, PORKBUN_SECRET_KEY

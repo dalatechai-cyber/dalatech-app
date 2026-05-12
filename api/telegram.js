@@ -52,7 +52,7 @@ const {
   suggestAlternatives,
   purchaseDomain,
   setCustomNameservers
-} = require("../lib/namecheap");
+} = require("../lib/porkbun");
 const { getLead, updateLead, STATUS } = require("../lib/leads");
 
 async function readJsonBody(req) {
@@ -375,7 +375,7 @@ async function processDomain({ lead, message, parsed }) {
   }
 }
 
-// PATH A: Check Namecheap availability → purchase → set Vercel nameservers
+// PATH A: Check Porkbun availability → purchase → set Vercel nameservers
 // → add to Vercel project → notify Bilguun. Any failure short-circuits with
 // a Telegram error and leaves the lead's status untouched so the command
 // can be retried cleanly.
@@ -388,7 +388,7 @@ async function processDomainNew({ lead, parsed, replySafe }) {
   try {
     availability = await checkDomainAvailability(domain);
   } catch (err) {
-    await replySafe(`❌ Namecheap холбогдсонгүй: ${err?.message || err}`);
+    await replySafe(`❌ Porkbun холбогдсонгүй: ${err?.message || err}`);
     return;
   }
   if (!availability.ok) {
@@ -413,7 +413,7 @@ async function processDomainNew({ lead, parsed, replySafe }) {
   // purchases automatically and tell Bilguun to register them manually.
   if (availability.premium) {
     const price = availability.premiumPrice ? ` ($${availability.premiumPrice.toFixed(2)}/жил premium)` : "";
-    await replySafe(`⚠️ ${domain}${price} — premium домэйн байна. Auto-purchase хийгдэхгүй. Namecheap дашбоардаас гар аргаар авна уу.`);
+    await replySafe(`⚠️ ${domain}${price} — premium домэйн байна. Auto-purchase хийгдэхгүй. Porkbun дашбоардаас гар аргаар авна уу.`);
     return;
   }
 
@@ -442,7 +442,7 @@ async function processDomainNew({ lead, parsed, replySafe }) {
     nsResult = { ok: false, error: err?.message || String(err) };
   }
   if (!nsResult.ok) {
-    await replySafe(`⚠️ ${domain} nameserver тохиргоо амжилтгүй: ${nsResult.error}\nNamecheap дашбоардаас ns1/ns2.vercel-dns.com тавина уу.`);
+    await replySafe(`⚠️ ${domain} nameserver тохиргоо амжилтгүй: ${nsResult.error}\nPorkbun дашбоардаас ns1/ns2.vercel-dns.com тавина уу.`);
   }
 
   // 4. attach to Vercel project.
@@ -455,7 +455,7 @@ async function processDomainNew({ lead, parsed, replySafe }) {
   }
   if (!attached.ok) {
     await replySafe(`⚠️ ${domain} Vercel project-д нэмэх амжилтгүй: ${attached.error}`);
-    // Still queue for monitoring — the domain exists at Namecheap. Bilguun
+    // Still queue for monitoring — the domain exists at Porkbun. Bilguun
     // can attach manually and the cron will pick up the live state.
   }
 
