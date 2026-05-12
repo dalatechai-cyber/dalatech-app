@@ -5,35 +5,43 @@
 // Bilguun talks to the bot in three commands per lead:
 //   `#NNN finish ...details...`   First production build. Body is free-form
 //                                 notes (real copy, prices, addresses, photo
-//                                 URLs). Bot acknowledges, builds, replies
-//                                 with a preview URL.
+//                                 URLs). Bot acknowledges, queues the build
+//                                 via QStash, and replies with the preview
+//                                 URL from a separate cron invocation when
+//                                 the build is done.
 //   `CHANGE #NNN ...feedback...`  Regenerate. Feedback accumulates across
 //                                 calls so each new build incorporates every
-//                                 prior request. Bot replies with a fresh
-//                                 preview URL.
+//                                 prior request. Same QStash hand-off; the
+//                                 cron prod stage delivers the new URL.
 //   `APPROVE #NNN`                Final sign-off. Bot acknowledges, deletes
 //                                 the three Vercel demo projects for this
 //                                 lead, and tells Bilguun to wire up the
-//                                 client's domain manually.
+//                                 client's domain manually. Approval is fast
+//                                 (deletes only, no generation) so it runs
+//                                 inline.
 //
 // Status machine (lib/leads.js):
 //   ... -> finishing -> awaiting_review <-> changing -> awaiting_review -> approved
 //
-// All long-running work happens inline because Vercel's per-invocation
-// budget for this function is 300s (vercel.json) which fits comfortably:
-// ~90s sonnet generation + ~30s haiku review + ~5s deploy + ~3s telegram.
+// finish/change builds take 90–180 s (sonnet generation + haiku review +
+// deploy) which exceeds Telegram's 60 s webhook timeout. The webhook now
+// matches the demo pipeline: save state, send the immediate ack, enqueue
+// `prod:N` via QStash, return. The build itself runs inside /api/cron
+// (lib/process-lead.js#processProdBuildStage) with its own 300 s budget,
+// and the hourly cron safety net (findStuckForStage + resumeStageForLead)
+// resumes the same stage if QStash drops a delivery.
 
-const { generateHtml, decorateHtml } = require("../lib/pipeline");
-const { deployToVercel, deleteVercelProject } = require("../lib/deploy");
-const { reviewAndFixHtml } = require("../lib/quality-review");
+const { deleteVercelProject } = require("../lib/deploy");
 const {
   parseFinishCommand,
   parseApproveCommand,
   parseChangeCommand,
   sendTelegramReply,
+  buildPreviewReadyText,
   envState
 } = require("../lib/telegram");
 const { getLead, updateLead, STATUS } = require("../lib/leads");
+const { triggerNextStage } = require("../lib/process-lead");
 
 async function readJsonBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -89,112 +97,10 @@ function summarizeExtras(extras) {
   return lines.join("\n");
 }
 
-// Render the message Bilguun receives once a production preview is live.
-// Spells out APPROVE / CHANGE so he never has to remember the syntax.
-function buildPreviewReadyText({ leadId, businessName, previewUrl, iteration }) {
-  const lines = [
-    `✅ #${leadId} (${businessName}) урьдчилсан хувилбар бэлэн боллоо.`,
-    "",
-    `🌐 ${previewUrl}`,
-    ""
-  ];
-  if (iteration > 1) {
-    lines.push(`🔁 Засвар №${iteration} оруулсан.`);
-    lines.push("");
-  }
-  lines.push(
-    "Дараагийн алхам:",
-    "",
-    `   ✅ APPROVE #${leadId}`,
-    "      Сайт бэлэн, домэйн холболт эхлэх.",
-    "",
-    `   ✏️ CHANGE #${leadId} [юу засах вэ]`,
-    `      Жишээ: CHANGE #${leadId} hero-г илүү тод болго, FAQ хэсгийг хас.`,
-    "      Хэдэн ч удаа явуулж болно. Засвар бүрд өмнөх бүх засварууд хэвээр үлдэнэ."
-  );
-  return lines.join("\n");
-}
-
-// Map a lead record into the brief shape that lib/prompt.js expects. Adds
-// the new optional `extras`, `photoUrls`, and `changeHistory` keys.
-function briefForProduction(lead) {
-  const extras = lead.extras || null;
-  const photoUrls = (extras?.photos || []).slice();
-  const changeHistory = Array.isArray(lead.changeHistory) ? lead.changeHistory : [];
-  return {
-    businessName:   lead.businessName,
-    industry:       lead.industry,
-    description:    lead.description,
-    services:       lead.services,
-    primaryColor:   lead.primaryColor,
-    secondaryColor: lead.secondaryColor,
-    style:          lead.style,
-    references:     lead.references,
-    sections:       lead.sections,
-    fullName:       lead.fullName,
-    email:          lead.email,
-    phone:          lead.phone,
-    logo:           null,
-    quality:        "production",
-    extras,
-    photoUrls,
-    changeHistory
-  };
-}
-
-// Generate -> haiku review -> decorate -> deploy. Returns
-// `{ html, previewUrl, projectName }` or throws on the first stage that
-// fails. The caller logs and updates the lead's status accordingly.
-//
-// `iteration` lets us namespace each Vercel project (1 = initial finish, 2+
-// = each CHANGE) so successive iterations land in distinct projects rather
-// than overwriting each other.
-async function runProductionBuild({ lead, iteration }) {
-  const brief = briefForProduction(lead);
-
-  console.log(`[telegram-webhook] #${lead.id} prod build iter=${iteration} photos=${brief.photoUrls.length} revisions=${brief.changeHistory.length}`);
-
-  const generated = await generateHtml(brief);
-
-  // Quality review pass. Haiku rewrites violations of the impeccable + emil
-  // rules. On any failure (timeout, malformed output) we keep the original
-  // HTML so the build still ships.
-  let reviewed = generated;
-  try {
-    const review = await reviewAndFixHtml({ html: generated, brief });
-    if (review?.html && /<html/i.test(review.html)) {
-      reviewed = review.html;
-      console.log(`[telegram-webhook] #${lead.id} review applied=${!!review.reviewed} length ${generated.length} -> ${reviewed.length}`);
-    }
-  } catch (err) {
-    console.warn(`[telegram-webhook] #${lead.id} review threw, using original:`, err?.message || err);
-  }
-
-  // Production sites do NOT get the chooser bar (only the 3 demos do). The
-  // chatbot widget stays so the business has a working AI assistant on the
-  // final site.
-  const decorated = decorateHtml(reviewed, {
-    brief,
-    leadId: lead.id,
-    designNumber: 1,
-    skipChooser: true
-  });
-
-  const projectLabel = iteration > 1
-    ? `${lead.businessName} prod v${iteration}`
-    : `${lead.businessName} prod`;
-
-  const deployment = await deployToVercel({
-    projectName: projectLabel,
-    html: decorated
-  });
-
-  return {
-    html: reviewed,
-    previewUrl: deployment.url,
-    projectName: deployment.projectName
-  };
-}
+// buildPreviewReadyText is imported from lib/telegram.js so the cron prod
+// stage (lib/process-lead.js) can render the same message. The build
+// pipeline itself (runProductionBuild + briefForProduction) was moved to
+// lib/process-lead.js — the webhook no longer runs generation inline.
 
 // Delete the 3 Vercel demo projects associated with this lead. Idempotent:
 // missing projects (404) count as success. Returns
@@ -232,15 +138,24 @@ async function processFinish({ lead, message, parsed }) {
   const replyId = message?.message_id;
   const extras = parsed.extras || { raw: "", notes: "", photos: [] };
 
-  console.log(`[telegram-webhook] #${lead.id} finish: starting production pipeline (photos=${extras.photos.length})`);
+  console.log(`[telegram-webhook] #${lead.id} finish: queueing prod:1 (photos=${extras.photos.length})`);
 
+  // Save extras + reply context + status so the cron prod stage has
+  // everything it needs. lastUserMessageId is what the cron stage will
+  // thread its preview-ready reply to.
   await updateLead(lead.id, {
     status: STATUS.FINISHING,
     extras,
+    productionIteration: 1,
     finishingStartedAt: new Date().toISOString(),
+    lastUserMessageId: replyId || null,
     lastError: null
   });
 
+  // Send the immediate ack so Bilguun knows we got the command. This must
+  // happen BEFORE the QStash enqueue so it lands within the webhook's
+  // sub-second response window — the actual build runs in a separate
+  // /api/cron invocation triggered by QStash, with its own 300s budget.
   await sendTelegramReply({
     chatId,
     text:
@@ -249,48 +164,9 @@ async function processFinish({ lead, message, parsed }) {
     replyToMessageId: replyId
   }).catch(err => console.error("[telegram-webhook] ack reply failed:", err?.message || err));
 
-  // Re-read so runProductionBuild sees the freshly persisted extras.
-  const refreshed = (await getLead(lead.id)) || lead;
-
-  let result;
-  try {
-    result = await runProductionBuild({ lead: refreshed, iteration: 1 });
-  } catch (err) {
-    console.error(`[telegram-webhook] #${lead.id} pipeline failed:`, err?.message || err);
-    await updateLead(lead.id, { status: STATUS.FAILED, lastError: err?.message || String(err) });
-    await sendTelegramReply({
-      chatId,
-      text: `❌ #${lead.id} амжилтгүй боллоо: ${err?.message || err}`,
-      replyToMessageId: replyId
-    }).catch(() => {});
-    return;
-  }
-
-  const now = new Date().toISOString();
-  await updateLead(lead.id, {
-    status: STATUS.AWAITING_REVIEW,
-    productionUrl: result.previewUrl,
-    productionUrls: [result.previewUrl],
-    productionProjectName: result.projectName,
-    productionIteration: 1,
-    finalUrl: result.previewUrl,             // back-compat alias
-    finalProjectName: result.projectName,    // back-compat alias
-    finishedAt: now,
-    lastError: null
-  });
-
-  await sendTelegramReply({
-    chatId,
-    text: buildPreviewReadyText({
-      leadId: lead.id,
-      businessName: lead.businessName,
-      previewUrl: result.previewUrl,
-      iteration: 1
-    }),
-    replyToMessageId: replyId
-  }).catch(err => console.error(`[telegram-webhook] #${lead.id} preview reply failed:`, err?.message || err));
-
-  console.log(`[telegram-webhook] #${lead.id} preview ready: ${result.previewUrl}`);
+  // Hand off to QStash → /api/cron with X-Stage=prod:1.
+  await triggerNextStage("prod:1", lead.id);
+  console.log(`[telegram-webhook] #${lead.id} prod:1 enqueued`);
 }
 
 async function processChange({ lead, message, parsed }) {
@@ -342,9 +218,15 @@ async function processChange({ lead, message, parsed }) {
   });
   const iteration = (Number(lead.productionIteration) || 1) + 1;
 
+  // Persist the in-flight iteration on the lead so the cron prod stage
+  // (lib/process-lead.js) knows which iteration to build and the safety
+  // net's resumeStageForLead can resume on the right `prod:N` if QStash
+  // drops the delivery.
   await updateLead(lead.id, {
     status: STATUS.CHANGING,
     changeHistory: history,
+    productionIteration: iteration,
+    lastUserMessageId: replyId || null,
     lastError: null
   });
 
@@ -356,61 +238,8 @@ async function processChange({ lead, message, parsed }) {
     replyToMessageId: replyId
   }).catch(err => console.error("[telegram-webhook] change ack failed:", err?.message || err));
 
-  const refreshed = (await getLead(lead.id)) || lead;
-
-  let result;
-  try {
-    result = await runProductionBuild({ lead: refreshed, iteration });
-  } catch (err) {
-    console.error(`[telegram-webhook] #${lead.id} change build failed:`, err?.message || err);
-    await updateLead(lead.id, {
-      status: STATUS.AWAITING_REVIEW,
-      lastError: `change:${iteration}: ${err?.message || String(err)}`
-    });
-    await sendTelegramReply({
-      chatId,
-      text: `❌ #${lead.id} засвар амжилтгүй боллоо: ${err?.message || err}\nӨмнөх хувилбар хэвээрээ үлдсэн: ${lead.productionUrl}`,
-      replyToMessageId: replyId
-    }).catch(() => {});
-    return;
-  }
-
-  // Annotate the just-pushed change-history entry with the resulting URL so
-  // future sweeps and audits can trace which preview each request produced.
-  const completedHistory = history.slice();
-  completedHistory[completedHistory.length - 1] = {
-    ...completedHistory[completedHistory.length - 1],
-    previewUrl: result.previewUrl,
-    projectName: result.projectName,
-    completedAt: new Date().toISOString()
-  };
-  const previewUrls = Array.isArray(lead.productionUrls) ? lead.productionUrls.slice() : [];
-  previewUrls.push(result.previewUrl);
-
-  await updateLead(lead.id, {
-    status: STATUS.AWAITING_REVIEW,
-    productionUrl: result.previewUrl,
-    productionUrls: previewUrls,
-    productionProjectName: result.projectName,
-    productionIteration: iteration,
-    finalUrl: result.previewUrl,
-    finalProjectName: result.projectName,
-    changeHistory: completedHistory,
-    lastError: null
-  });
-
-  await sendTelegramReply({
-    chatId,
-    text: buildPreviewReadyText({
-      leadId: lead.id,
-      businessName: lead.businessName,
-      previewUrl: result.previewUrl,
-      iteration
-    }),
-    replyToMessageId: replyId
-  }).catch(err => console.error(`[telegram-webhook] #${lead.id} change preview reply failed:`, err?.message || err));
-
-  console.log(`[telegram-webhook] #${lead.id} change ready iter=${iteration}: ${result.previewUrl}`);
+  await triggerNextStage(`prod:${iteration}`, lead.id);
+  console.log(`[telegram-webhook] #${lead.id} prod:${iteration} enqueued`);
 }
 
 async function processApprove({ lead, message }) {
