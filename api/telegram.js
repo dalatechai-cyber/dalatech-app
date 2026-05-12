@@ -505,6 +505,13 @@ const HELP_TEXT = [
 ].join("\n");
 
 async function handler(req, res) {
+  // Token visibility check at every entrypoint. If Vercel's runtime ever
+  // strips TELEGRAM_BOT_TOKEN for this function (wrong env scope, missing on
+  // a new deployment, etc.) the bot goes silent — and the only way to know
+  // from logs is to look at the per-invocation preview here.
+  const bootEnv = envState();
+  console.log(`[telegram-webhook] BOOT method=${req.method} url=${req.url || "?"} token=${bootEnv.tokenPreview} chatIdConfigured=${bootEnv.chatIdPreview}`);
+
   if (req.method === "GET") {
     return res.status(200).json({ ok: true, service: "dalatech-telegram-webhook" });
   }
@@ -515,14 +522,23 @@ async function handler(req, res) {
 
   let update;
   try { update = await readJsonBody(req); }
-  catch { return res.status(200).json({ ok: true }); }
+  catch (err) {
+    console.error("[telegram-webhook] readJsonBody failed:", err?.message || err);
+    return res.status(200).json({ ok: true });
+  }
+
+  console.log(`[telegram-webhook] update_id=${update?.update_id ?? "?"} keys=[${Object.keys(update || {}).join(",")}]`);
 
   // Acknowledge Telegram before doing slow work so it does not retry.
+  // IMPORTANT: this function is `async` and Vercel waits for the returned
+  // promise to settle before freezing the Lambda — so awaits AFTER this line
+  // do complete. The early ack only prevents Telegram-side retries.
   res.status(200).json({ ok: true });
+  console.log("[telegram-webhook] acked Telegram with 200, continuing async work");
 
   const message = update?.message || update?.edited_message || update?.channel_post;
   if (!message) {
-    console.log("[telegram-webhook] update has no message, ignoring");
+    console.log("[telegram-webhook] update has no message/edited_message/channel_post, ignoring");
     return;
   }
 
@@ -530,20 +546,32 @@ async function handler(req, res) {
   const fromId = message.from?.id;
   const replyId = message.message_id;
   const text = message.text || "";
-  console.log(`[telegram-webhook] inbound text="${text.replace(/\s+/g, " ").slice(0, 200)}" chatId=${chatId} fromId=${fromId}`);
+  console.log(`[telegram-webhook] inbound chatId=${chatId} fromId=${fromId} messageId=${replyId} text="${text.replace(/\s+/g, " ").slice(0, 200)}"`);
 
   // Best-effort reply helper that never throws. Used on every return path so
   // Bilguun always sees that the bot received and classified his message —
   // the previous handler had three silent-drop paths (unauthorized sender,
   // unrecognized command, outer catch) that made the bot look dead.
-  const replySafe = (textBody) => {
-    if (!chatId) return Promise.resolve();
-    return sendTelegramReply({ chatId, text: textBody, replyToMessageId: replyId })
-      .catch(err => console.error("[telegram-webhook] reply failed:", err?.message || err));
+  // Logs entry + outcome so a "no reply" failure tells us whether replySafe
+  // was reached and whether the underlying fetch succeeded or threw.
+  const replySafe = async (textBody) => {
+    const preview = String(textBody || "").replace(/\s+/g, " ").slice(0, 120);
+    if (!chatId) {
+      console.warn(`[telegram-webhook] replySafe skipped (no chatId) preview="${preview}"`);
+      return;
+    }
+    console.log(`[telegram-webhook] replySafe -> chatId=${chatId} replyTo=${replyId} preview="${preview}"`);
+    try {
+      const out = await sendTelegramReply({ chatId, text: textBody, replyToMessageId: replyId });
+      console.log(`[telegram-webhook] replySafe ok messageId=${out?.result?.message_id ?? "?"}`);
+    } catch (err) {
+      console.error(`[telegram-webhook] replySafe failed: ${err?.message || err}`, err?.responseBody || "");
+    }
   };
 
   try {
     const env = envState();
+    console.log(`[telegram-webhook] env hasToken=${env.hasToken} hasChatId=${env.hasChatId} expectedChat=${env.chatIdPreview}`);
     if (!isAuthorizedSender(env, chatId, fromId)) {
       // TELEGRAM_CHAT_ID doubles as the auth whitelist, so any DM whose
       // chat.id/from.id doesn't match the configured notification chat
@@ -559,8 +587,10 @@ async function handler(req, res) {
       return;
     }
 
+    console.log(`[telegram-webhook] authorized OK chatId=${chatId} fromId=${fromId}`);
+
     if (!text.trim()) {
-      console.log("[telegram-webhook] message has no text");
+      console.log("[telegram-webhook] message has empty text, replying with help");
       await replySafe("🤖 Текст агуулаагүй мессеж хүлээн авлаа.\n\n" + HELP_TEXT);
       return;
     }
@@ -571,31 +601,40 @@ async function handler(req, res) {
     const approve = parseApproveCommand(text);
     const change  = !approve ? parseChangeCommand(text) : null;
     const finish  = (!approve && !change) ? parseFinishCommand(text) : null;
+    console.log(`[telegram-webhook] parse approve=${approve ? approve.id : "no"} change=${change ? `${change.id}:${(change.feedback || "").slice(0, 40)}` : "no"} finish=${finish ? `${finish.id} notes=${finish.extras.notes.length}ch photos=${finish.extras.photos.length}` : "no"}`);
 
     const cmd = approve || change || finish;
     if (!cmd) {
-      console.log("[telegram-webhook] no recognised command in message");
+      console.log("[telegram-webhook] no recognised command in message, replying with help");
       await replySafe(HELP_TEXT);
       return;
     }
 
+    console.log(`[telegram-webhook] looking up lead #${cmd.id}`);
     const lead = await getLead(cmd.id);
     if (!lead) {
+      console.warn(`[telegram-webhook] lead #${cmd.id} not found`);
       await replySafe(`⚠️ #${cmd.id} олдсонгүй. Захиалгын дугаараа шалгана уу.`);
       return;
     }
+    console.log(`[telegram-webhook] lead #${lead.id} status=${lead.status} productionUrl=${lead.productionUrl || "none"} iter=${lead.productionIteration || 0}`);
 
     if (approve) {
+      console.log(`[telegram-webhook] dispatching processApprove for #${lead.id}`);
       await processApprove({ lead, message });
+      console.log(`[telegram-webhook] processApprove returned for #${lead.id}`);
       return;
     }
     if (change) {
+      console.log(`[telegram-webhook] dispatching processChange for #${lead.id}`);
       await processChange({ lead, message, parsed: change });
+      console.log(`[telegram-webhook] processChange returned for #${lead.id}`);
       return;
     }
 
     // Finish flow.
     if (lead.status === STATUS.APPROVED) {
+      console.log(`[telegram-webhook] finish on APPROVED lead #${lead.id}, sending already-approved reply`);
       await replySafe(`ℹ️ #${lead.id} аль хэдийн зөвшөөрөгдсөн: ${lead.productionUrl || lead.finalUrl || "—"}`);
       return;
     }
@@ -603,6 +642,7 @@ async function handler(req, res) {
       // Bilguun re-sent a bare `#NNN finish` after the preview was already
       // delivered. Surface the existing URL + APPROVE/CHANGE menu instead
       // of regenerating with no new information.
+      console.log(`[telegram-webhook] bare finish on AWAITING_REVIEW lead #${lead.id}, resending preview menu`);
       await replySafe(buildPreviewReadyText({
         leadId: lead.id,
         businessName: lead.businessName,
@@ -612,14 +652,19 @@ async function handler(req, res) {
       return;
     }
     if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING) && !isStaleBuild(lead)) {
+      console.log(`[telegram-webhook] finish while #${lead.id} is ${lead.status} (not stale), telling user to wait`);
       await replySafe(`⏳ #${lead.id} одоо бүтэж байна, түр хүлээнэ үү.`);
       return;
     }
 
+    console.log(`[telegram-webhook] dispatching processFinish for #${lead.id}`);
     await processFinish({ lead, message, parsed: finish });
+    console.log(`[telegram-webhook] processFinish returned for #${lead.id}`);
   } catch (err) {
     console.error("[telegram-webhook] handler error:", err?.message || err, err?.stack || "");
     await replySafe(`❌ Дотоод алдаа: ${err?.message || err}`);
+  } finally {
+    console.log("[telegram-webhook] handler invocation complete");
   }
 }
 
