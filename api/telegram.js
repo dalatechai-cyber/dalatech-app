@@ -5,31 +5,31 @@
 // Bilguun talks to the bot in three commands per lead:
 //   `#NNN finish ...details...`   First production build. Body is free-form
 //                                 notes (real copy, prices, addresses, photo
-//                                 URLs). Bot acknowledges, queues the build
-//                                 via QStash, and replies with the preview
-//                                 URL from a separate cron invocation when
-//                                 the build is done.
-//   `CHANGE #NNN ...feedback...`  Regenerate. Feedback accumulates across
-//                                 calls so each new build incorporates every
-//                                 prior request. Same QStash hand-off; the
-//                                 cron prod stage delivers the new URL.
-//   `APPROVE #NNN`                Final sign-off. Bot acknowledges, deletes
-//                                 the three Vercel demo projects for this
-//                                 lead, and tells Bilguun to wire up the
-//                                 client's domain manually. Approval is fast
-//                                 (deletes only, no generation) so it runs
-//                                 inline.
+//                                 URLs). The webhook saves extras, sets the
+//                                 lead to `ready_to_finish`, and sends an
+//                                 immediate ack. The local PM2 watcher
+//                                 (routines/watch.js) polls Upstash every
+//                                 60 s, picks the lead up, runs the full
+//                                 6-step build (plan → generate → review →
+//                                 fix loop → deploy → notify) with no time
+//                                 limit, then posts the preview URL.
+//   `CHANGE #NNN ...feedback...`  Regenerate. Feedback is appended to
+//                                 changeHistory and the lead is set back to
+//                                 `ready_to_finish` so the watcher rebuilds
+//                                 with the new feedback.
+//   `APPROVE #NNN`                Final sign-off. Runs inline because it is
+//                                 fast (just deletes the three Vercel demo
+//                                 projects for the lead).
 //
 // Status machine (lib/leads.js):
-//   ... -> finishing -> awaiting_review <-> changing -> awaiting_review -> approved
+//   ... -> ready_to_finish -> finishing -> awaiting_review
+//          ^------- ready_to_finish <- changing <---------/
+//                                                        -> approved
 //
-// finish/change builds take 90–180 s (sonnet generation + haiku review +
-// deploy) which exceeds Telegram's 60 s webhook timeout. The webhook now
-// matches the demo pipeline: save state, send the immediate ack, enqueue
-// `prod:N` via QStash, return. The build itself runs inside /api/cron
-// (lib/process-lead.js#processProdBuildStage) with its own 300 s budget,
-// and the hourly cron safety net (findStuckForStage + resumeStageForLead)
-// resumes the same stage if QStash drops a delivery.
+// The Vercel webhook has a sub-second response budget; production builds
+// take 5-15 minutes (plan + multi-iteration generate/review + deploy) and
+// must NOT run inside this lambda. The local watcher owns that work; the
+// webhook only updates state and acknowledges.
 
 const { deleteVercelProject } = require("../lib/deploy");
 const {
@@ -41,7 +41,6 @@ const {
   envState
 } = require("../lib/telegram");
 const { getLead, updateLead, STATUS } = require("../lib/leads");
-const { triggerNextStage } = require("../lib/process-lead");
 
 async function readJsonBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -63,14 +62,19 @@ function isAuthorizedSender(env, chatIdFromMessage, fromId) {
   return String(chatIdFromMessage) === allowed || String(fromId) === allowed;
 }
 
-// A FINISHING / CHANGING lead is considered "stale" if its updatedAt is more
-// than STALE_BUILD_MS ago. Vercel kills this function at 300s; anything still
-// pinned in those statuses 10 minutes later is the result of a hard crash,
-// not active work, so subsequent commands should be allowed to proceed
-// instead of being told "wait".
-const STALE_BUILD_MS = 10 * 60 * 1000;
+// A FINISHING / CHANGING / READY_TO_FINISH lead is "stale" if its
+// updatedAt is more than STALE_BUILD_MS ago. The local watcher
+// (routines/watch.js) has no time budget, so the threshold is generous:
+// a healthy plan + 3 iterations + deploy on a busy machine can run 15-25
+// minutes. Anything pinned in these states for 60 minutes is almost
+// certainly a crashed watcher or an orphan from before the queue was
+// drained, so subsequent commands are allowed to proceed.
+const STALE_BUILD_MS = 60 * 60 * 1000;
 function isStaleBuild(lead) {
-  if (lead?.status !== STATUS.FINISHING && lead?.status !== STATUS.CHANGING) return false;
+  const s = lead?.status;
+  if (s !== STATUS.FINISHING && s !== STATUS.CHANGING && s !== STATUS.READY_TO_FINISH) {
+    return false;
+  }
   const ts = Date.parse(lead.updatedAt || lead.finishingStartedAt || "");
   if (!Number.isFinite(ts)) return true;
   return (Date.now() - ts) > STALE_BUILD_MS;
@@ -138,13 +142,14 @@ async function processFinish({ lead, message, parsed }) {
   const replyId = message?.message_id;
   const extras = parsed.extras || { raw: "", notes: "", photos: [] };
 
-  console.log(`[telegram-webhook] #${lead.id} finish: queueing prod:1 (photos=${extras.photos.length})`);
+  console.log(`[telegram-webhook] #${lead.id} finish: queueing for local watcher (photos=${extras.photos.length})`);
 
-  // Save extras + reply context + status so the cron prod stage has
-  // everything it needs. lastUserMessageId is what the cron stage will
-  // thread its preview-ready reply to.
+  // Save extras + reply context + status so the local PM2 watcher
+  // (routines/watch.js) has everything it needs when it next polls.
+  // lastUserMessageId is what the watcher will thread its preview-ready
+  // reply to.
   await updateLead(lead.id, {
-    status: STATUS.FINISHING,
+    status: STATUS.READY_TO_FINISH,
     extras,
     productionIteration: 1,
     finishingStartedAt: new Date().toISOString(),
@@ -152,21 +157,16 @@ async function processFinish({ lead, message, parsed }) {
     lastError: null
   });
 
-  // Send the immediate ack so Bilguun knows we got the command. This must
-  // happen BEFORE the QStash enqueue so it lands within the webhook's
-  // sub-second response window — the actual build runs in a separate
-  // /api/cron invocation triggered by QStash, with its own 300s budget.
+  // Single ack reply; the watcher takes over from here. Phrased to match
+  // the spec exactly so Bilguun sees the same copy every time.
   await sendTelegramReply({
     chatId,
     text:
-      `⏳ #${lead.id} (${lead.businessName}) бүрэн хувилбарыг бэлдэж байна... 2-5 минут болно.\n\n` +
+      `✅ Мэдээлэл хадгаллаа. Систем автоматаар барьж эхэлнэ. ` +
+      `Бэлэн болмогц preview URL Telegram-д ирнэ.\n\n` +
       `${summarizeExtras(extras)}`,
     replyToMessageId: replyId
   }).catch(err => console.error("[telegram-webhook] ack reply failed:", err?.message || err));
-
-  // Hand off to QStash → /api/cron with X-Stage=prod:1.
-  await triggerNextStage("prod:1", lead.id);
-  console.log(`[telegram-webhook] #${lead.id} prod:1 enqueued`);
 }
 
 async function processChange({ lead, message, parsed }) {
@@ -192,7 +192,7 @@ async function processChange({ lead, message, parsed }) {
     }).catch(() => {});
     return;
   }
-  if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING) && !isStaleBuild(lead)) {
+  if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING || lead.status === STATUS.READY_TO_FINISH) && !isStaleBuild(lead)) {
     await sendTelegramReply({
       chatId,
       text: `⏳ #${lead.id} одоогоор бүтэж байна. Дуустал хүлээнэ үү.`,
@@ -218,12 +218,10 @@ async function processChange({ lead, message, parsed }) {
   });
   const iteration = (Number(lead.productionIteration) || 1) + 1;
 
-  // Persist the in-flight iteration on the lead so the cron prod stage
-  // (lib/process-lead.js) knows which iteration to build and the safety
-  // net's resumeStageForLead can resume on the right `prod:N` if QStash
-  // drops the delivery.
+  // Queue for the local PM2 watcher. The watcher reads productionIteration
+  // to know whether this is an initial build (1) or a CHANGE round (>1).
   await updateLead(lead.id, {
-    status: STATUS.CHANGING,
+    status: STATUS.READY_TO_FINISH,
     changeHistory: history,
     productionIteration: iteration,
     lastUserMessageId: replyId || null,
@@ -233,13 +231,11 @@ async function processChange({ lead, message, parsed }) {
   await sendTelegramReply({
     chatId,
     text:
-      `🔁 #${lead.id} засвар №${iteration} бэлдэж байна... 2-5 минут болно.\n\n` +
-      `📝 Засвар: ${parsed.feedback.slice(0, 220)}${parsed.feedback.length > 220 ? "..." : ""}`,
+      `✅ Мэдээлэл хадгаллаа. Систем автоматаар барьж эхэлнэ. ` +
+      `Бэлэн болмогц preview URL Telegram-д ирнэ.\n\n` +
+      `📝 Засвар №${iteration}: ${parsed.feedback.slice(0, 220)}${parsed.feedback.length > 220 ? "..." : ""}`,
     replyToMessageId: replyId
   }).catch(err => console.error("[telegram-webhook] change ack failed:", err?.message || err));
-
-  await triggerNextStage(`prod:${iteration}`, lead.id);
-  console.log(`[telegram-webhook] #${lead.id} prod:${iteration} enqueued`);
 }
 
 async function processApprove({ lead, message }) {
@@ -255,7 +251,7 @@ async function processApprove({ lead, message }) {
     return;
   }
 
-  if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING) && !isStaleBuild(lead)) {
+  if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING || lead.status === STATUS.READY_TO_FINISH) && !isStaleBuild(lead)) {
     await sendTelegramReply({
       chatId,
       text: `⏳ #${lead.id} одоогоор бүтэж байна. Дуустал хүлээнэ үү, дараа нь APPROVE хийнэ үү.`,
@@ -481,7 +477,7 @@ async function handler(req, res) {
       }));
       return;
     }
-    if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING) && !isStaleBuild(lead)) {
+    if ((lead.status === STATUS.FINISHING || lead.status === STATUS.CHANGING || lead.status === STATUS.READY_TO_FINISH) && !isStaleBuild(lead)) {
       console.log(`[telegram-webhook] finish while #${lead.id} is ${lead.status} (not stale), telling user to wait`);
       await replySafe(`⏳ #${lead.id} одоо бүтэж байна, түр хүлээнэ үү.`);
       return;
