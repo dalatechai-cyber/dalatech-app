@@ -529,17 +529,18 @@ async function handler(req, res) {
 
   console.log(`[telegram-webhook] update_id=${update?.update_id ?? "?"} keys=[${Object.keys(update || {}).join(",")}]`);
 
-  // Acknowledge Telegram before doing slow work so it does not retry.
-  // IMPORTANT: this function is `async` and Vercel waits for the returned
-  // promise to settle before freezing the Lambda — so awaits AFTER this line
-  // do complete. The early ack only prevents Telegram-side retries.
-  res.status(200).json({ ok: true });
-  console.log("[telegram-webhook] acked Telegram with 200, continuing async work");
-
+  // Tested empirically against Vercel's Node runtime: once res.end / res.json
+  // has been called, the Lambda is dropped into a suspended state where
+  // outbound fetches and setTimeout callbacks don't fire until something
+  // wakes the runtime (167 s observed for a single GET to Upstash in that
+  // mode, even with a 6 s Promise.race timeout). The cron lambdas don't
+  // hit this because they never respond early. So we mirror them: do
+  // every Upstash/Telegram round-trip BEFORE the response, and only emit
+  // res.json from a finally block at the very end.
   const message = update?.message || update?.edited_message || update?.channel_post;
   if (!message) {
     console.log("[telegram-webhook] update has no message/edited_message/channel_post, ignoring");
-    return;
+    return res.status(200).json({ ok: true });
   }
 
   const chatId = message.chat?.id;
@@ -665,6 +666,12 @@ async function handler(req, res) {
     await replySafe(`❌ Дотоод алдаа: ${err?.message || err}`);
   } finally {
     console.log("[telegram-webhook] handler invocation complete");
+    // Single source of truth for the webhook ack — fired after all the
+    // async work so the Lambda stays in normal (non-suspended) mode for
+    // every Upstash and Telegram round-trip above.
+    if (!res.headersSent) {
+      res.status(200).json({ ok: true });
+    }
   }
 }
 
