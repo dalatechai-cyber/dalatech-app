@@ -1,5 +1,6 @@
 "use strict";
 
+const dns = require("dns").promises;
 const {
   processOneGeneration,
   processOneSend,
@@ -12,11 +13,21 @@ const {
   findDueForSend,
   findStuckForStage,
   findLeadsForDemoCleanup,
+  findDomainPendingLeads,
   listLeads,
   updateLead,
   STATUS
 } = require("../lib/leads");
-const { deleteVercelProject } = require("../lib/deploy");
+const {
+  deleteVercelProject,
+  getVercelDomainConfig
+} = require("../lib/deploy");
+const {
+  sendTelegramReply,
+  buildDomainLiveMessage,
+  buildDomainWarningMessage,
+  envState: telegramEnvState
+} = require("../lib/telegram");
 
 const MAX_GENERATIONS_PER_RUN = 1;
 const MAX_SENDS_PER_RUN = 5;
@@ -26,6 +37,18 @@ const MAX_SENDS_PER_RUN = 5;
 // (each delete is one Vercel API round-trip, ~1-3s).
 const DEMO_CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEMO_CLEANUP_LIMIT_PER_RUN = 5;
+// Domain propagation sweep. 25 leads per hour is well within the 300s
+// budget (each DNS + Vercel-config check is ~1-3s and can be parallelised
+// further if the queue grows).
+const DOMAIN_PENDING_LIMIT_PER_RUN = 25;
+// One-shot warning to Bilguun after 72h still in DOMAIN_PENDING. Keeping
+// it idempotent via domainConnect.lastWarningAt avoids spamming him every
+// hour for a domain the client never finished configuring.
+const DOMAIN_WARNING_AFTER_MS = 72 * 60 * 60 * 1000;
+// Vercel's apex IP. CNAME target is `cname.vercel-dns.com`. We accept
+// either as evidence that DNS is pointing at us.
+const VERCEL_APEX_IP = "76.76.21.21";
+const VERCEL_CNAME_SUFFIX = "vercel-dns.com";
 
 function isAuthorized(req) {
   const expected = process.env.CRON_SECRET;
@@ -159,13 +182,29 @@ async function handler(req, res) {
     console.error("[cron] demo cleanup sweep error:", err?.message || err);
   }
 
+  // Hourly DNS propagation sweep for every lead waiting on a domain to go
+  // live. The handler that processed the DOMAIN command parked the lead in
+  // DOMAIN_PENDING; this loop is what eventually flips it to DOMAIN_LIVE
+  // and tells Bilguun.
+  const domainSweeps = [];
+  try {
+    const pending = await findDomainPendingLeads({ limit: DOMAIN_PENDING_LIMIT_PER_RUN });
+    for (const lead of pending) {
+      const summary = await sweepDomainPending(lead);
+      domainSweeps.push(summary);
+    }
+  } catch (err) {
+    console.error("[cron] domain pending sweep error:", err?.message || err);
+  }
+
   return res.status(200).json({
     ok: true,
     timestamp: new Date().toISOString(),
     generations,
     stageResumes,
     sends,
-    cleanups
+    cleanups,
+    domainSweeps
   });
 }
 
@@ -214,6 +253,165 @@ async function sweepDemoProjects(lead) {
   } catch (err) {
     console.error(`[cron] sweep #${lead.id} updateLead failed:`, err?.message || err);
   }
+  return summary;
+}
+
+// Best-effort DNS resolution check: does `domain` point at Vercel? We
+// accept either evidence (apex A record at 76.76.21.21, or any A record in
+// 76.76.0.0/16, or a CNAME ending in vercel-dns.com / vercel.app), since
+// clients may use either configuration style. Returns `{ live, evidence }`
+// where evidence describes which signal matched (used for logs only).
+async function checkDomainPointsToVercel(domain) {
+  let cnameEvidence = null;
+  let aEvidence = null;
+  let lastError = null;
+  try {
+    const cnames = await dns.resolveCname(domain);
+    if (Array.isArray(cnames) && cnames.length > 0) {
+      const match = cnames.find(c => typeof c === "string" && (c.endsWith(VERCEL_CNAME_SUFFIX) || c.endsWith("vercel.app")));
+      if (match) cnameEvidence = `CNAME→${match}`;
+    }
+  } catch (err) {
+    // ENODATA / ENOTFOUND just mean no CNAME on the record; only network
+    // errors are worth logging.
+    if (err?.code && err.code !== "ENODATA" && err.code !== "ENOTFOUND") {
+      lastError = `cname: ${err.code}`;
+    }
+  }
+  if (cnameEvidence) return { live: true, evidence: cnameEvidence };
+
+  try {
+    const ips = await dns.resolve4(domain);
+    if (Array.isArray(ips) && ips.length > 0) {
+      const exact = ips.find(ip => ip === VERCEL_APEX_IP);
+      if (exact) {
+        aEvidence = `A→${exact}`;
+      } else {
+        const range = ips.find(ip => ip.startsWith("76.76."));
+        if (range) aEvidence = `A→${range}`;
+      }
+    }
+  } catch (err) {
+    if (err?.code && err.code !== "ENODATA" && err.code !== "ENOTFOUND") {
+      lastError = `a: ${err.code}`;
+    }
+  }
+
+  if (aEvidence) return { live: true, evidence: aEvidence };
+  return { live: false, evidence: lastError || "no-vercel-record" };
+}
+
+// Notify Bilguun using whichever chat/message we have available. Failure
+// to deliver is logged but never aborts the sweep.
+async function notifyBilguun(lead, text) {
+  const env = telegramEnvState();
+  if (!env.hasToken || !env.hasChatId) {
+    console.warn(`[cron] domain notify skipped: token=${env.hasToken} chatId=${env.hasChatId}`);
+    return;
+  }
+  try {
+    await sendTelegramReply({
+      chatId: env.chatId,
+      text,
+      replyToMessageId: lead?.lastUserMessageId || null
+    });
+  } catch (err) {
+    console.error(`[cron] domain notify failed lead=#${lead?.id}:`, err?.message || err);
+  }
+}
+
+// Check one DOMAIN_PENDING lead. On live: flip to DOMAIN_LIVE, tell Bilguun
+// once. On still-pending past 72h with no prior warning: send the warning,
+// remember we did. Otherwise just update lastCheckedAt.
+async function sweepDomainPending(lead, now = new Date()) {
+  const summary = {
+    leadId: lead.id,
+    domain: lead?.domainConnect?.domain || null,
+    live: false,
+    warned: false,
+    error: null
+  };
+  const dc = lead?.domainConnect;
+  if (!dc || !dc.domain) {
+    summary.error = "missing domainConnect";
+    console.warn(`[cron] sweep #${lead.id} skipped: ${summary.error}`);
+    return summary;
+  }
+  const domain = dc.domain;
+
+  // Primary signal: Node DNS resolution (matches the user spec).
+  // Secondary signal: Vercel's own /v6/domains/{domain}/config endpoint,
+  // which is authoritative for "Vercel can serve this domain" (it also
+  // verifies the cert + project attachment). We accept either.
+  let dnsResult;
+  try {
+    dnsResult = await checkDomainPointsToVercel(domain);
+  } catch (err) {
+    dnsResult = { live: false, evidence: `threw:${err?.message || err}` };
+  }
+
+  let vercelLive = false;
+  let vercelEvidence = null;
+  try {
+    const cfg = await getVercelDomainConfig(domain);
+    if (cfg.ok && cfg.misconfigured === false) {
+      vercelLive = true;
+      vercelEvidence = "vercel:configured";
+    } else if (!cfg.ok) {
+      vercelEvidence = `vercel-err:${cfg.error}`;
+    } else {
+      vercelEvidence = "vercel:misconfigured";
+    }
+  } catch (err) {
+    vercelEvidence = `vercel-threw:${err?.message || err}`;
+  }
+
+  const live = dnsResult.live || vercelLive;
+  const nowIso = now.toISOString();
+
+  console.log(`[cron] sweep #${lead.id} domain=${domain} dns=${dnsResult.evidence} vercel=${vercelEvidence} live=${live}`);
+
+  if (live) {
+    await updateLead(lead.id, {
+      status: STATUS.DOMAIN_LIVE,
+      domainConnect: {
+        ...dc,
+        liveAt: nowIso,
+        lastCheckedAt: nowIso,
+        lastEvidence: dnsResult.evidence || vercelEvidence
+      },
+      finalUrl: `https://${domain}`,
+      lastError: null
+    });
+    await notifyBilguun(lead, buildDomainLiveMessage({ domain }));
+    summary.live = true;
+    return summary;
+  }
+
+  // Still pending — bump lastCheckedAt. Also send the one-shot warning
+  // if 72h elapsed since queueing and we haven't warned yet.
+  const queuedTs = Date.parse(dc.queuedAt || dc.attachedAt || lead.updatedAt || "");
+  const ageMs = Number.isFinite(queuedTs) ? (now.getTime() - queuedTs) : 0;
+  let lastWarningAt = dc.lastWarningAt || null;
+  if (ageMs >= DOMAIN_WARNING_AFTER_MS && !lastWarningAt) {
+    const hoursPending = Math.floor(ageMs / (60 * 60 * 1000));
+    await notifyBilguun(lead, buildDomainWarningMessage({
+      leadId: lead.id,
+      domain,
+      hoursPending
+    }));
+    lastWarningAt = nowIso;
+    summary.warned = true;
+  }
+
+  await updateLead(lead.id, {
+    domainConnect: {
+      ...dc,
+      lastCheckedAt: nowIso,
+      lastEvidence: dnsResult.evidence || vercelEvidence,
+      lastWarningAt
+    }
+  });
   return summary;
 }
 

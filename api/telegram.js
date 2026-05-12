@@ -31,15 +31,28 @@
 // must NOT run inside this lambda. The local watcher owns that work; the
 // webhook only updates state and acknowledges.
 
-const { deleteVercelProject } = require("../lib/deploy");
+const {
+  deleteVercelProject,
+  addDomainToVercelProject
+} = require("../lib/deploy");
 const {
   parseFinishCommand,
   parseApproveCommand,
   parseChangeCommand,
+  parseDomainCommand,
   sendTelegramReply,
   buildPreviewReadyText,
+  buildDomainPurchasedMessage,
+  buildDomainTakenMessage,
+  buildDomainPathBMessage,
   envState
 } = require("../lib/telegram");
+const {
+  checkDomainAvailability,
+  suggestAlternatives,
+  purchaseDomain,
+  setCustomNameservers
+} = require("../lib/namecheap");
 const { getLead, updateLead, STATUS } = require("../lib/leads");
 
 async function readJsonBody(req) {
@@ -318,6 +331,197 @@ async function processApprove({ lead, message }) {
   console.log(`[telegram-webhook] #${lead.id} approved (cleanup attempted=${cleanup.attempted} deleted=${cleanup.deleted} failed=${cleanup.failed.length})`);
 }
 
+// Path A (purchase) / Path B (existing) flow for `DOMAIN #NNN <new|existing>
+// <domain>`. Both paths leave the lead in DOMAIN_PENDING so the hourly cron
+// can sweep for DNS propagation.
+//
+// Idempotency: if the lead already has the same domain queued, we skip the
+// destructive side-effects (no duplicate purchase, no duplicate attach
+// attempt) and re-send the appropriate status message.
+async function processDomain({ lead, message, parsed }) {
+  const chatId = message?.chat?.id;
+  const replyId = message?.message_id;
+  const replySafe = (text) =>
+    sendTelegramReply({ chatId, text, replyToMessageId: replyId }).catch(err =>
+      console.error(`[telegram-webhook] #${lead.id} domain reply failed:`, err?.message || err)
+    );
+
+  // Need a deployed production project to attach the domain to.
+  if (!lead.productionProjectName) {
+    await replySafe(`⚠️ #${lead.id} эхлээд "#${lead.id} finish" гэж бичиж бүрэн хувилбарыг үүсгэнэ үү.`);
+    return;
+  }
+
+  // Idempotent re-entry. Same domain, already in flight → re-send status.
+  if (
+    lead.domainConnect &&
+    lead.domainConnect.domain === parsed.domain &&
+    (lead.status === STATUS.DOMAIN_PENDING || lead.status === STATUS.DOMAIN_LIVE)
+  ) {
+    if (lead.status === STATUS.DOMAIN_LIVE) {
+      await replySafe(`ℹ️ ${parsed.domain} аль хэдийн идэвхтэй: https://${parsed.domain}`);
+    } else {
+      await replySafe(`ℹ️ ${parsed.domain} аль хэдийн дараалалд орсон. DNS идэвхжихийг хүлээж байна (24-48 цаг).`);
+    }
+    return;
+  }
+
+  console.log(`[telegram-webhook] #${lead.id} domain ${parsed.path} ${parsed.domain} (project=${lead.productionProjectName})`);
+
+  if (parsed.path === "new") {
+    await processDomainNew({ lead, parsed, replySafe });
+  } else {
+    await processDomainExisting({ lead, parsed, replySafe });
+  }
+}
+
+// PATH A: Check Namecheap availability → purchase → set Vercel nameservers
+// → add to Vercel project → notify Bilguun. Any failure short-circuits with
+// a Telegram error and leaves the lead's status untouched so the command
+// can be retried cleanly.
+async function processDomainNew({ lead, parsed, replySafe }) {
+  const { id: leadId } = lead;
+  const { domain } = parsed;
+
+  // 1. availability check.
+  let availability;
+  try {
+    availability = await checkDomainAvailability(domain);
+  } catch (err) {
+    await replySafe(`❌ Namecheap холбогдсонгүй: ${err?.message || err}`);
+    return;
+  }
+  if (!availability.ok) {
+    await replySafe(`❌ ${domain} шалгалт амжилтгүй: ${availability.error}`);
+    return;
+  }
+  if (!availability.available) {
+    // 1a. taken — suggest alternatives.
+    let alts = [];
+    try {
+      const suggestion = await suggestAlternatives(domain);
+      if (suggestion.ok) alts = suggestion.available;
+    } catch (err) {
+      console.warn(`[telegram-webhook] #${leadId} suggestAlternatives threw:`, err?.message || err);
+    }
+    await replySafe(buildDomainTakenMessage({ leadId, domain, alternatives: alts }));
+    return;
+  }
+
+  // Premium domains carry a much higher price tag than the default checkout
+  // amount; the user spec assumes standard pricing, so we refuse premium
+  // purchases automatically and tell Bilguun to register them manually.
+  if (availability.premium) {
+    const price = availability.premiumPrice ? ` ($${availability.premiumPrice.toFixed(2)}/жил premium)` : "";
+    await replySafe(`⚠️ ${domain}${price} — premium домэйн байна. Auto-purchase хийгдэхгүй. Namecheap дашбоардаас гар аргаар авна уу.`);
+    return;
+  }
+
+  // 2. purchase.
+  let purchase;
+  try {
+    purchase = await purchaseDomain(domain);
+  } catch (err) {
+    await replySafe(`❌ ${domain} худалдан авах амжилтгүй боллоо: ${err?.message || err}`);
+    return;
+  }
+  if (!purchase.ok) {
+    await replySafe(`❌ ${domain} худалдан авах амжилтгүй: ${purchase.error}`);
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  // 3. set Vercel nameservers. Continue even on failure: the purchase
+  // succeeded, and Bilguun can flip nameservers manually if this step
+  // fails. Single warning either way.
+  let nsResult;
+  try {
+    nsResult = await setCustomNameservers(domain);
+  } catch (err) {
+    nsResult = { ok: false, error: err?.message || String(err) };
+  }
+  if (!nsResult.ok) {
+    await replySafe(`⚠️ ${domain} nameserver тохиргоо амжилтгүй: ${nsResult.error}\nNamecheap дашбоардаас ns1/ns2.vercel-dns.com тавина уу.`);
+  }
+
+  // 4. attach to Vercel project.
+  let attached;
+  try {
+    attached = await addDomainToVercelProject(lead.productionProjectName, domain);
+  } catch (err) {
+    await replySafe(`⚠️ ${domain} Vercel project-д нэмэх амжилтгүй: ${err?.message || err}`);
+    attached = { ok: false, error: err?.message || String(err) };
+  }
+  if (!attached.ok) {
+    await replySafe(`⚠️ ${domain} Vercel project-д нэмэх амжилтгүй: ${attached.error}`);
+    // Still queue for monitoring — the domain exists at Namecheap. Bilguun
+    // can attach manually and the cron will pick up the live state.
+  }
+
+  await updateLead(leadId, {
+    status: STATUS.DOMAIN_PENDING,
+    domainConnect: {
+      domain,
+      path: "new",
+      projectName: lead.productionProjectName,
+      purchased: true,
+      purchaseTransactionId: purchase.transactionId,
+      purchaseOrderId: purchase.orderId,
+      purchaseChargedAmount: purchase.chargedAmount,
+      nameserversSetAt: nsResult?.ok ? now : null,
+      attachedAt: attached?.ok ? now : null,
+      queuedAt: now,
+      liveAt: null,
+      lastCheckedAt: null,
+      lastWarningAt: null
+    },
+    lastError: null
+  });
+
+  await replySafe(buildDomainPurchasedMessage({ domain }));
+}
+
+// PATH B: Attach existing domain to Vercel project, fetch DNS config, send
+// instructions Bilguun forwards to the client.
+async function processDomainExisting({ lead, parsed, replySafe }) {
+  const { id: leadId, businessName } = lead;
+  const { domain } = parsed;
+
+  let attached;
+  try {
+    attached = await addDomainToVercelProject(lead.productionProjectName, domain);
+  } catch (err) {
+    await replySafe(`❌ ${domain} Vercel project-д нэмэх амжилтгүй: ${err?.message || err}`);
+    return;
+  }
+  if (!attached.ok) {
+    await replySafe(`❌ ${domain} Vercel project-д нэмэх амжилтгүй: ${attached.error}`);
+    return;
+  }
+
+  const now = new Date().toISOString();
+
+  await updateLead(leadId, {
+    status: STATUS.DOMAIN_PENDING,
+    domainConnect: {
+      domain,
+      path: "existing",
+      projectName: lead.productionProjectName,
+      purchased: false,
+      attachedAt: now,
+      instructionsSentAt: now,
+      queuedAt: now,
+      liveAt: null,
+      lastCheckedAt: null,
+      lastWarningAt: null
+    },
+    lastError: null
+  });
+
+  await replySafe(buildDomainPathBMessage({ leadId, businessName, domain }));
+}
+
 // Help text shown when the bot receives a message it can't classify, so
 // Bilguun always knows the bot is alive and how to talk to it.
 const HELP_TEXT = [
@@ -326,7 +530,9 @@ const HELP_TEXT = [
   "Боломжит командууд:",
   "   #001 finish [нэмэлт мэдээлэл]   — бүрэн хувилбар үүсгэх",
   "   CHANGE #001 [юу засах вэ]       — засвар оруулах",
-  "   APPROVE #001                    — сайтыг батлах"
+  "   APPROVE #001                    — сайтыг батлах",
+  "   DOMAIN #001 new gsauto.mn       — шинэ домэйн авах",
+  "   DOMAIN #001 existing gsauto.mn  — клиентийн домэйн холбох"
 ].join("\n");
 
 async function handler(req, res) {
@@ -422,14 +628,15 @@ async function handler(req, res) {
     }
 
     // Parse in priority order: APPROVE first (shortest, most specific),
-    // then CHANGE (anchored on the change keyword), then FINISH (which
-    // greedily slurps free-form text after the keyword).
+    // then CHANGE, then DOMAIN, then FINISH (which greedily slurps
+    // free-form text after the keyword).
     const approve = parseApproveCommand(text);
     const change  = !approve ? parseChangeCommand(text) : null;
-    const finish  = (!approve && !change) ? parseFinishCommand(text) : null;
-    console.log(`[telegram-webhook] parse approve=${approve ? approve.id : "no"} change=${change ? `${change.id}:${(change.feedback || "").slice(0, 40)}` : "no"} finish=${finish ? `${finish.id} notes=${finish.extras.notes.length}ch photos=${finish.extras.photos.length}` : "no"}`);
+    const domain  = (!approve && !change) ? parseDomainCommand(text) : null;
+    const finish  = (!approve && !change && !domain) ? parseFinishCommand(text) : null;
+    console.log(`[telegram-webhook] parse approve=${approve ? approve.id : "no"} change=${change ? `${change.id}:${(change.feedback || "").slice(0, 40)}` : "no"} domain=${domain ? `${domain.id}:${domain.path}:${domain.domain}` : "no"} finish=${finish ? `${finish.id} notes=${finish.extras.notes.length}ch photos=${finish.extras.photos.length}` : "no"}`);
 
-    const cmd = approve || change || finish;
+    const cmd = approve || change || domain || finish;
     if (!cmd) {
       console.log("[telegram-webhook] no recognised command in message, replying with help");
       await replySafe(HELP_TEXT);
@@ -455,6 +662,12 @@ async function handler(req, res) {
       console.log(`[telegram-webhook] dispatching processChange for #${lead.id}`);
       await processChange({ lead, message, parsed: change });
       console.log(`[telegram-webhook] processChange returned for #${lead.id}`);
+      return;
+    }
+    if (domain) {
+      console.log(`[telegram-webhook] dispatching processDomain for #${lead.id} ${domain.path} ${domain.domain}`);
+      await processDomain({ lead, message, parsed: domain });
+      console.log(`[telegram-webhook] processDomain returned for #${lead.id}`);
       return;
     }
 
