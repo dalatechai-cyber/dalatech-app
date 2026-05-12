@@ -11,12 +11,21 @@ const {
   findQueuedForGeneration,
   findDueForSend,
   findStuckForStage,
+  findLeadsForDemoCleanup,
   listLeads,
+  updateLead,
   STATUS
 } = require("../lib/leads");
+const { deleteVercelProject } = require("../lib/deploy");
 
 const MAX_GENERATIONS_PER_RUN = 1;
 const MAX_SENDS_PER_RUN = 5;
+// Weekly demo cleanup. The cron fires hourly; the sweep filters leads to
+// "older than 7 days" so the same hour-based schedule covers it. Cap how
+// many we touch per run to keep latency predictable on the 300s budget
+// (each delete is one Vercel API round-trip, ~1-3s).
+const DEMO_CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEMO_CLEANUP_LIMIT_PER_RUN = 5;
 
 function isAuthorized(req) {
   const expected = process.env.CRON_SECRET;
@@ -130,13 +139,82 @@ async function handler(req, res) {
     sends.push(result);
   }
 
+  // Weekly demo-project cleanup sweep. Garbage-collects the three Vercel
+  // demo projects for every lead that is sent/chosen/approved, has been
+  // alive >7 days, and still has its demo project names recorded. The
+  // approve flow in api/telegram.js handles fast cleanup at approval time;
+  // this sweep covers leads that never reach #NNN finish (sent / chosen
+  // only), so demos for inactive leads can never accumulate.
+  const cleanups = [];
+  try {
+    const cleanable = await findLeadsForDemoCleanup({
+      olderThanMs: DEMO_CLEANUP_AGE_MS,
+      limit: DEMO_CLEANUP_LIMIT_PER_RUN
+    });
+    for (const lead of cleanable) {
+      const summary = await sweepDemoProjects(lead);
+      cleanups.push(summary);
+    }
+  } catch (err) {
+    console.error("[cron] demo cleanup sweep error:", err?.message || err);
+  }
+
   return res.status(200).json({
     ok: true,
     timestamp: new Date().toISOString(),
     generations,
     stageResumes,
-    sends
+    sends,
+    cleanups
   });
+}
+
+// Delete all Vercel demo projects associated with a single lead, then
+// mark the lead with the cleanup outcome. Matches the inline approve-time
+// cleanup in api/telegram.js but is reached via the hourly cron instead.
+async function sweepDemoProjects(lead) {
+  const map = lead?.demoProjectNames || {};
+  const slots = Object.keys(map).sort();
+  const summary = {
+    leadId: lead.id,
+    status: lead.status,
+    attempted: 0,
+    deleted: 0,
+    alreadyGone: 0,
+    failed: []
+  };
+  for (const slot of slots) {
+    const name = map[slot];
+    if (!name) continue;
+    summary.attempted += 1;
+    try {
+      const out = await deleteVercelProject(name);
+      if (out.ok && out.alreadyGone) {
+        summary.alreadyGone += 1;
+        console.log(`[cron] sweep #${lead.id} demo project ${name} (slot ${slot}) already gone`);
+      } else if (out.ok) {
+        summary.deleted += 1;
+        console.log(`[cron] sweep #${lead.id} demo project ${name} (slot ${slot}) deleted (${out.status})`);
+      } else {
+        summary.failed.push({ slot, name, error: out.error || `HTTP ${out.status}` });
+        console.warn(`[cron] sweep #${lead.id} demo project ${name} (slot ${slot}) delete failed:`, out.error);
+      }
+    } catch (err) {
+      summary.failed.push({ slot, name, error: err?.message || String(err) });
+      console.error(`[cron] sweep #${lead.id} demo project ${name} delete threw:`, err?.message || err);
+    }
+  }
+  const fullySucceeded = summary.attempted > 0 && summary.failed.length === 0;
+  try {
+    await updateLead(lead.id, {
+      demoDeleted: fullySucceeded,
+      demoCleanupAt: new Date().toISOString(),
+      demoCleanupSummary: summary
+    });
+  } catch (err) {
+    console.error(`[cron] sweep #${lead.id} updateLead failed:`, err?.message || err);
+  }
+  return summary;
 }
 
 module.exports = handler;
