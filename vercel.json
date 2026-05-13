@@ -15,12 +15,26 @@
     },
     "api/choice.js": {
       "maxDuration": 30
+    },
+    "api/morning-report.js": {
+      "maxDuration": 60
+    },
+    "api/follow-up.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
     {
       "path": "/api/cron",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/morning-report",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/follow-up",
+      "schedule": "0 2 * * *"
     }
   ]
 }

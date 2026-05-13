@@ -123,9 +123,33 @@ If you want the watcher to poll more aggressively during testing, set
 WATCH_POLL_MS=5000
 ```
 
-## Daily routines (PM2 cron)
+## Daily routines (Vercel cron — primary)
 
-Two additional fire-once routines run on a daily schedule under PM2's
+> **Note:** the morning report and follow-up reminder now run as Vercel
+> cron jobs in production. See `api/morning-report.js` and
+> `api/follow-up.js`; both are registered in `vercel.json` and fire from
+> the cloud, so they keep working even when Bilguun's machine is off.
+>
+> ```text
+> 0 1 * * *  →  /api/morning-report   # 09:00 Asia/Ulaanbaatar
+> 0 2 * * *  →  /api/follow-up        # 10:00 Asia/Ulaanbaatar
+> ```
+>
+> The PM2 scripts below stay in the tree as a local backup (so they can
+> be run manually or revived if the Vercel cron breaks), but they should
+> NOT be scheduled in PM2 at the same time as the Vercel cron — that
+> would double-send the Telegram messages. If they were previously
+> scheduled, remove them now:
+>
+> ```bash
+> pm2 delete dalatech-morning
+> pm2 delete dalatech-followup
+> pm2 save
+> ```
+
+## Daily routines (PM2 cron — backup only)
+
+Two fire-once routines that can run on a daily schedule under PM2's
 built-in cron syntax. Both are scheduled in Asia/Ulaanbaatar local time
 and use `--no-autorestart` so PM2 does not restart the process after it
 exits cleanly.
