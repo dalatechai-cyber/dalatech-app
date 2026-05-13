@@ -122,3 +122,100 @@ If you want the watcher to poll more aggressively during testing, set
 ```env
 WATCH_POLL_MS=5000
 ```
+
+## Daily routines (PM2 cron)
+
+Two additional fire-once routines run on a daily schedule under PM2's
+built-in cron syntax. Both are scheduled in Asia/Ulaanbaatar local time
+and use `--no-autorestart` so PM2 does not restart the process after it
+exits cleanly.
+
+### Morning report — `routines/morning-report.js`
+
+Every day at 09:00 Ulaanbaatar time. Reads every lead from Upstash,
+groups them by status, and sends Bilguun a single Telegram message
+summarizing what needs attention today: total leads, the breakdown by
+status, urgent items (production preview waiting for APPROVE/CHANGE for
+2+ days, or a domain pending DNS for 3+ days), and stale demos (SENT
+status for 3+ days with no client choice).
+
+```bash
+pm2 start routines/morning-report.js \
+  --name dalatech-morning \
+  --cron "0 9 * * *" \
+  --no-autorestart \
+  --timezone "Asia/Ulaanbaatar"
+
+pm2 save
+```
+
+### Follow-up reminder — `routines/follow-up.js`
+
+Every day at 10:00 Ulaanbaatar time. Scans every lead in `sent` status
+that has been sitting for 3+ days without the client choosing a design,
+and sends Bilguun one Telegram reminder per lead with the client's name,
+phone, email, and the three demo URLs. It is a reminder only — no email
+or message is sent to the client; Bilguun decides whether to call or
+message them.
+
+```bash
+pm2 start routines/follow-up.js \
+  --name dalatech-followup \
+  --cron "0 10 * * *" \
+  --no-autorestart \
+  --timezone "Asia/Ulaanbaatar"
+
+pm2 save
+```
+
+### Test runs
+
+Either script can be invoked directly without PM2 to verify it works
+before scheduling:
+
+```bash
+node routines/morning-report.js
+node routines/follow-up.js
+```
+
+Each one reads `.env.local`, fetches leads from Upstash, sends the
+Telegram message(s), and exits.
+
+## Manual routines
+
+### Gmail label organizer — `routines/gmail-organizer.js`
+
+Manual one-shot. Bilguun runs:
+
+```bash
+node routines/gmail-organizer.js
+```
+
+It connects to Gmail via the official Gmail REST API using an OAuth2
+refresh token, creates the `DalaTech/*` label tree if missing, then
+classifies every message ever sent FROM the DalaTech system address
+(`hello@dalatech.online` by default) and labels each one:
+
+- Lead-notification email subject → `DalaTech/Шинэ хүсэлт`
+- Demo-delivery email subject → `DalaTech/Демо илгээсэн`
+- Final-site live email subject → `DalaTech/Дууссан`
+- Anything else from the system address → `DalaTech/Систем`
+
+When it finishes it sends Bilguun a Telegram summary with the count of
+emails labeled per bucket. The organizer is idempotent — re-running it
+does not re-label messages that already carry the target label.
+
+#### One-time OAuth setup
+
+1. https://console.cloud.google.com → enable the Gmail API on a project.
+2. Create an OAuth client id (type: **Desktop app**). Copy the client id
+   and client secret into `.env.local` as `GMAIL_CLIENT_ID` and
+   `GMAIL_CLIENT_SECRET`.
+3. Run a one-off OAuth flow with scope
+   `https://www.googleapis.com/auth/gmail.modify`, `access_type=offline`,
+   `prompt=consent` to receive a refresh token. Google's OAuth Playground
+   works (choose your own client id under the gear icon). Copy the
+   refresh token into `.env.local` as `GMAIL_REFRESH_TOKEN`.
+4. (Optional) set `GMAIL_SYSTEM_ADDRESS=hello@dalatech.online` in
+   `.env.local` if your `FROM_EMAIL` is a display-name format the
+   built-in parser misreads.
